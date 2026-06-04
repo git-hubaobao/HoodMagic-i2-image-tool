@@ -1,0 +1,16 @@
+{
+  "name": "@hoodmagic/provider-adapters",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./image2": "./src/image2/index.ts"
+  },
+  "sideEffects": false
+}

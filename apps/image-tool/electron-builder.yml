@@ -1,0 +1,37 @@
+extends: null
+appId: com.hoodmagic.i2.imagetool
+productName: HoodMagic小魔帽
+directories:
+  output: ../../../HoodMagic-i2-release
+files:
+  - out/**/*
+  - package.json
+asar: true
+afterPack: scripts/after-pack.mjs
+extraResources:
+  - from: build/icon.ico
+    to: icon.ico
+npmRebuild: false
+win:
+  icon: build/icon.ico
+  signAndEditExecutable: false
+  executableName: HoodMagic-i2
+  target:
+    - nsis
+artifactName: HoodMagic-i2-Setup-${version}.${ext}
+nsis:
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  customNsisBinary:
+    url: https://mirrors.huaweicloud.com/electron-builder-binaries/nsis-3.0.4.1/nsis-3.0.4.1.7z
+mac:
+  target:
+    - dir
+linux:
+  target:
+    - AppImage
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
