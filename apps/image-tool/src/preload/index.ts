@@ -106,6 +106,16 @@ contextBridge.exposeInMainWorld('imageTool', {
   deletePromptTemplate: (templateId: string): Promise<void> => {
     return ipcRenderer.invoke('image-tool:delete-prompt-template', templateId) as Promise<void>
   },
+  deletePromptTemplates: (templateIds: string[]): Promise<number> => {
+    return ipcRenderer.invoke('image-tool:delete-prompt-templates', templateIds) as Promise<number>
+  },
+  movePromptTemplatesToCategory: (templateIds: string[], categoryId: string | null): Promise<number> => {
+    return ipcRenderer.invoke(
+      'image-tool:move-prompt-templates-to-category',
+      templateIds,
+      categoryId
+    ) as Promise<number>
+  },
   listPromptTemplateCategories: (): Promise<ImageToolPromptTemplateCategory[]> => {
     return ipcRenderer.invoke('image-tool:list-prompt-template-categories') as Promise<
       ImageToolPromptTemplateCategory[]
@@ -145,6 +155,12 @@ contextBridge.exposeInMainWorld('imageTool', {
     return ipcRenderer.invoke(
       'image-tool:export-prompt-template',
       templateId
+    ) as Promise<ImageToolPromptTemplateExportResult>
+  },
+  exportPromptTemplates: (templateIds: string[]): Promise<ImageToolPromptTemplateExportResult> => {
+    return ipcRenderer.invoke(
+      'image-tool:export-prompt-templates',
+      templateIds
     ) as Promise<ImageToolPromptTemplateExportResult>
   },
   exportPromptTemplateCategory: (categoryId: string): Promise<ImageToolPromptTemplateExportResult> => {

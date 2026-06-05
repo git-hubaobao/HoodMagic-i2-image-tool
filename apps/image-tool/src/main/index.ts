@@ -2,7 +2,7 @@ import { Buffer } from 'node:buffer'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { basename, extname, isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
 import { inflateSync } from 'node:zlib'
 
 import {
@@ -901,7 +901,12 @@ const createPromptLibraryId = (prefix: string): string => {
 const getPromptAssetPath = (assetId: string): string => join(getPromptLibraryAssetsDir(), basename(assetId))
 
 const isPromptTemplateImportFile = (fileName: string): boolean => {
-  return fileName.endsWith('.image-prompt-template.json') || fileName.endsWith('.image-prompt-pack.json')
+  const normalizedFileName = fileName.toLowerCase()
+  return (
+    normalizedFileName.endsWith('.json') ||
+    normalizedFileName.endsWith('.image-prompt-template.json') ||
+    normalizedFileName.endsWith('.image-prompt-pack.json')
+  )
 }
 
 const createDataUrlHash = (dataUrl?: string): string => {
@@ -967,6 +972,39 @@ const removePromptTemplatePreviewAsset = async (assetId?: string): Promise<void>
   await rm(assetPath, { force: true })
 }
 
+const promptTemplatePreviewImageExtensions = ['.png', '.jpg', '.jpeg', '.webp'] as const
+
+const isPromptTemplatePreviewImageFile = (fileName: string): boolean => {
+  return promptTemplatePreviewImageExtensions.includes(extname(fileName).toLowerCase() as (typeof promptTemplatePreviewImageExtensions)[number])
+}
+
+const isValidPromptTemplatePreviewBuffer = (buffer: Buffer): boolean => {
+  return Boolean(getMimeTypeFromDetectedType(detectImageType(buffer)))
+}
+
+const savePromptTemplatePreviewAssetBuffer = async (
+  buffer: Buffer,
+  templateId: string,
+  sourceFileName: string,
+  preferredMimeType?: SupportedImageMimeType
+): Promise<string> => {
+  const detectedMimeType = getMimeTypeFromDetectedType(detectImageType(buffer))
+  const mimeType = detectedMimeType ?? preferredMimeType
+
+  if (!mimeType) {
+    throw new ImageToolMainError('invalid_preview_image', 'Preview image must be a valid JPEG, PNG, or WEBP image.')
+  }
+
+  const parsedSourceName = basename(sourceFileName, extname(sourceFileName))
+  const extension = getImageFileExtension(undefined, mimeType)
+  const fileName = `${sanitizeFileNamePart(templateId)}-${sanitizeFileNamePart(parsedSourceName)}.${extension}`
+  const assetPath = ensureUniqueFilePath(getPromptLibraryAssetsDir(), fileName)
+
+  await writeFile(assetPath, buffer)
+
+  return basename(assetPath)
+}
+
 const savePromptTemplatePreviewAsset = async (
   dataUrl: string | undefined,
   templateId: string
@@ -983,13 +1021,203 @@ const savePromptTemplatePreviewAsset = async (
     throw new ImageToolMainError('invalid_preview_image', 'Preview image must be a valid JPEG, PNG, or WEBP image.')
   }
 
-  const extension = getImageFileExtension(undefined, mimeType)
-  const fileName = `${sanitizeFileNamePart(templateId)}-${Date.now().toString(36)}.${extension}`
-  const assetPath = ensureUniqueFilePath(getPromptLibraryAssetsDir(), fileName)
+  return savePromptTemplatePreviewAssetBuffer(buffer, templateId, `${templateId}.${getImageFileExtension(undefined, mimeType)}`, mimeType)
+}
 
-  await writeFile(assetPath, buffer)
+const getPromptTemplatePreviewReference = (record: PromptTemplateImportRecord): string | undefined => {
+  const previewImage = record.previewImage
+  const reference = [
+    previewImage?.fileName,
+    previewImage?.path,
+    previewImage?.assetId,
+    record.previewImageFile
+  ].find((value) => typeof value === 'string' && value.trim())
 
-  return basename(assetPath)
+  return typeof reference === 'string' ? reference.trim() : undefined
+}
+
+const getImportFileStem = (fileName: string | undefined): string | undefined => {
+  if (!fileName) {
+    return undefined
+  }
+
+  return basename(fileName)
+    .replace(/\.image-prompt-template\.json$/i, '')
+    .replace(/\.image-prompt-pack\.json$/i, '')
+    .replace(/\.json$/i, '')
+}
+
+const getPromptTemplatePreviewMatchStems = (
+  record: PromptTemplateImportRecord,
+  fileName: string | undefined
+): string[] => {
+  const stems = [record.id, record.title, getImportFileStem(fileName)]
+  const uniqueStems = new Set<string>()
+
+  for (const stem of stems) {
+    if (typeof stem !== 'string' || !stem.trim()) {
+      continue
+    }
+
+    uniqueStems.add(stem.trim().toLowerCase())
+    uniqueStems.add(sanitizeFileNamePart(stem).toLowerCase())
+  }
+
+  return [...uniqueStems]
+}
+
+const getUniquePromptTemplatePreviewDirs = (sourceDir?: string): string[] => {
+  const dirs = [getPromptLibraryAssetsDir(), getPromptLibraryImportsDir(), sourceDir].filter(
+    (dir): dir is string => Boolean(dir)
+  )
+  const uniqueDirs = new Set<string>()
+
+  for (const dir of dirs) {
+    uniqueDirs.add(dir)
+  }
+
+  return [...uniqueDirs]
+}
+
+const getPromptTemplatePreviewReferenceCandidates = (reference: string, sourceDir?: string): string[] => {
+  const candidatePaths: string[] = []
+  const allowedDirs = getUniquePromptTemplatePreviewDirs(sourceDir)
+
+  if (isAbsolute(reference)) {
+    for (const dir of allowedDirs) {
+      if (isPathInside(reference, dir)) {
+        candidatePaths.push(reference)
+        break
+      }
+    }
+
+    return candidatePaths
+  }
+
+  const referenceFileName = basename(reference)
+
+  for (const dir of allowedDirs) {
+    const directPath = join(dir, reference)
+
+    if (isPathInside(directPath, dir)) {
+      candidatePaths.push(directPath)
+    }
+
+    const assetLikePath = join(dir, referenceFileName)
+
+    if (assetLikePath !== directPath && isPathInside(assetLikePath, dir)) {
+      candidatePaths.push(assetLikePath)
+    }
+  }
+
+  return candidatePaths
+}
+
+const readPromptTemplatePreviewFile = async (filePath: string): Promise<Buffer | undefined> => {
+  if (!isPromptTemplatePreviewImageFile(filePath) || !existsSync(filePath)) {
+    return undefined
+  }
+
+  try {
+    const buffer = await readFile(filePath)
+    return isValidPromptTemplatePreviewBuffer(buffer) ? buffer : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const findPromptTemplatePreviewFileByStem = async (
+  record: PromptTemplateImportRecord,
+  fileName: string | undefined,
+  sourceDir?: string
+): Promise<string | undefined> => {
+  const matchStems = new Set(getPromptTemplatePreviewMatchStems(record, fileName))
+
+  if (matchStems.size === 0) {
+    return undefined
+  }
+
+  for (const dir of getUniquePromptTemplatePreviewDirs(sourceDir)) {
+    try {
+      const fileNames = await readdir(dir)
+
+      for (const candidateFileName of fileNames) {
+        if (!isPromptTemplatePreviewImageFile(candidateFileName)) {
+          continue
+        }
+
+        const candidateStem = basename(candidateFileName, extname(candidateFileName)).toLowerCase()
+
+        if (!matchStems.has(candidateStem)) {
+          continue
+        }
+
+        const candidatePath = join(dir, candidateFileName)
+
+        if (!isPathInside(candidatePath, dir) || !(await readPromptTemplatePreviewFile(candidatePath))) {
+          continue
+        }
+
+        return candidatePath
+      }
+    } catch {
+      continue
+    }
+  }
+
+  return undefined
+}
+
+const resolvePromptTemplatePreviewFile = async (
+  record: PromptTemplateImportRecord,
+  fileName: string | undefined,
+  sourceDir?: string
+): Promise<string | undefined> => {
+  const reference = getPromptTemplatePreviewReference(record)
+
+  if (reference) {
+    for (const candidatePath of getPromptTemplatePreviewReferenceCandidates(reference, sourceDir)) {
+      if (await readPromptTemplatePreviewFile(candidatePath)) {
+        return candidatePath
+      }
+    }
+  }
+
+  return findPromptTemplatePreviewFileByStem(record, fileName, sourceDir)
+}
+
+const savePromptTemplatePreviewAssetFromFile = async (
+  filePath: string,
+  templateId: string
+): Promise<string | undefined> => {
+  const buffer = await readPromptTemplatePreviewFile(filePath)
+
+  if (!buffer) {
+    return undefined
+  }
+
+  if (isPathInside(filePath, getPromptLibraryAssetsDir())) {
+    return basename(filePath)
+  }
+
+  return savePromptTemplatePreviewAssetBuffer(buffer, templateId, basename(filePath))
+}
+
+const savePromptTemplatePreviewAssetForRecord = async (
+  record: PromptTemplateImportRecord,
+  templateId: string,
+  fileName?: string,
+  sourceDir?: string
+): Promise<string | undefined> => {
+  const previewDataUrl = record.previewImage?.dataUrl
+
+  if (previewDataUrl) {
+    return savePromptTemplatePreviewAsset(previewDataUrl, templateId)
+  }
+
+  const previewFilePath = await resolvePromptTemplatePreviewFile(record, fileName, sourceDir)
+
+  return previewFilePath ? savePromptTemplatePreviewAssetFromFile(previewFilePath, templateId) : undefined
 }
 
 const getCategoryPath = (
@@ -1165,31 +1393,61 @@ const savePromptTemplateFromInput = async (
 
 const importPromptTemplateRecords = async (
   records: readonly PromptTemplateImportRecord[],
-  fileName?: string
+  fileName?: string,
+  sourceDir?: string
 ): Promise<ImageToolPromptTemplateImportResult> => {
   let data = await readImageToolData()
   const errors: ImageToolPromptTemplateImportResult['errors'] = []
   let imported = 0
   let skipped = 0
-  const knownFingerprints = new Set<string>()
+  let updated = 0
+  const knownTemplatesByFingerprint = new Map<string, PromptTemplate>()
 
   for (const template of data.promptTemplates) {
-    knownFingerprints.add(createTemplateFingerprint(template, await readPromptTemplatePreview(template)))
+    knownTemplatesByFingerprint.set(createTemplateFingerprint(template, await readPromptTemplatePreview(template)), template)
+    knownTemplatesByFingerprint.set(createTemplateFingerprint(template, undefined), template)
   }
 
   for (const record of records) {
     try {
       const previewDataUrl = record.previewImage?.dataUrl
       const fingerprint = createTemplateFingerprint(record, previewDataUrl)
+      const existingTemplate =
+        knownTemplatesByFingerprint.get(fingerprint) ??
+        knownTemplatesByFingerprint.get(createTemplateFingerprint(record, undefined))
 
-      if (knownFingerprints.has(fingerprint)) {
+      if (existingTemplate) {
+        if (!existingTemplate.previewAssetId) {
+          const previewAssetId = await savePromptTemplatePreviewAssetForRecord(
+            record,
+            existingTemplate.id,
+            fileName,
+            sourceDir
+          )
+
+          if (previewAssetId) {
+            data = upsertPromptTemplate(data, {
+              ...existingTemplate,
+              previewAssetId
+            })
+            const updatedTemplate = data.promptTemplates.find((template) => template.id === existingTemplate.id)
+
+            if (updatedTemplate) {
+              knownTemplatesByFingerprint.set(fingerprint, updatedTemplate)
+              knownTemplatesByFingerprint.set(createTemplateFingerprint(updatedTemplate, undefined), updatedTemplate)
+            }
+
+            updated += 1
+          }
+        }
+
         skipped += 1
         continue
       }
 
       const categoryResult = ensurePromptTemplateCategoryPath(data, record.categoryPath)
       const templateId = createPromptLibraryId('prompt-template')
-      const previewAssetId = await savePromptTemplatePreviewAsset(previewDataUrl, templateId)
+      const previewAssetId = await savePromptTemplatePreviewAssetForRecord(record, templateId, fileName, sourceDir)
 
       data = upsertPromptTemplate(categoryResult.data, {
         id: templateId,
@@ -1205,7 +1463,13 @@ const importPromptTemplateRecords = async (
         ...(typeof record.isFavorite === 'boolean' ? { isFavorite: record.isFavorite } : {}),
         source: 'imported'
       })
-      knownFingerprints.add(fingerprint)
+      const importedTemplate = data.promptTemplates.find((template) => template.id === templateId)
+
+      if (importedTemplate) {
+        knownTemplatesByFingerprint.set(fingerprint, importedTemplate)
+        knownTemplatesByFingerprint.set(createTemplateFingerprint(importedTemplate, undefined), importedTemplate)
+      }
+
       imported += 1
     } catch (error) {
       errors.push({
@@ -1220,6 +1484,7 @@ const importPromptTemplateRecords = async (
   return {
     imported,
     skipped,
+    updated,
     errors
   }
 }
@@ -1231,6 +1496,7 @@ const importPromptTemplateFileAtPath = async (filePath: string): Promise<ImageTo
     return {
       imported: 0,
       skipped: 0,
+      updated: 0,
       errors: [{ fileName, reason: 'Unsupported prompt template file.' }]
     }
   }
@@ -1238,11 +1504,12 @@ const importPromptTemplateFileAtPath = async (filePath: string): Promise<ImageTo
   try {
     const rawDocument = await readFile(filePath, 'utf8')
     const parsedDocument = parsePromptTemplateImportDocument(JSON.parse(rawDocument))
-    return importPromptTemplateRecords(parsedDocument.templates, fileName)
+    return importPromptTemplateRecords(parsedDocument.templates, fileName, dirname(filePath))
   } catch (error) {
     return {
       imported: 0,
       skipped: 0,
+      updated: 0,
       errors: [
         {
           fileName,
@@ -1263,6 +1530,7 @@ const importPromptTemplateFileContent = async (
     return {
       imported: 0,
       skipped: 0,
+      updated: 0,
       errors: [{ fileName, reason: 'Unsupported prompt template file.' }]
     }
   }
@@ -1274,6 +1542,7 @@ const importPromptTemplateFileContent = async (
     return {
       imported: 0,
       skipped: 0,
+      updated: 0,
       errors: [
         {
           fileName,
@@ -2238,6 +2507,58 @@ const registerImageToolIpc = (): void => {
     await writeImageToolData(removePromptTemplate(data, templateId))
   })
 
+  ipcMain.handle('image-tool:delete-prompt-templates', async (_event, templateIds: string[]): Promise<number> => {
+    const data = await readImageToolData()
+    const templateIdsToDelete = new Set(templateIds.filter((templateId) => typeof templateId === 'string'))
+    const templatesToDelete = data.promptTemplates.filter((template) => templateIdsToDelete.has(template.id))
+
+    await Promise.all(templatesToDelete.map((template) => removePromptTemplatePreviewAsset(template.previewAssetId)))
+    await writeImageToolData({
+      ...data,
+      promptTemplates: data.promptTemplates.filter((template) => !templateIdsToDelete.has(template.id))
+    })
+
+    return templatesToDelete.length
+  })
+
+  ipcMain.handle(
+    'image-tool:move-prompt-templates-to-category',
+    async (_event, templateIds: string[], categoryId: string | null): Promise<number> => {
+      const data = await readImageToolData()
+      const templateIdsToMove = new Set(templateIds.filter((templateId) => typeof templateId === 'string'))
+      const targetCategoryId = categoryId || DEFAULT_PROMPT_TEMPLATE_CATEGORY_ID
+
+      if (
+        targetCategoryId !== DEFAULT_PROMPT_TEMPLATE_CATEGORY_ID &&
+        !data.promptTemplateCategories.some((category) => category.id === targetCategoryId)
+      ) {
+        throw new ImageToolMainError('prompt_template_category_not_found', 'Prompt template category was not found.')
+      }
+
+      const now = new Date().toISOString()
+      let movedCount = 0
+
+      await writeImageToolData({
+        ...data,
+        promptTemplates: data.promptTemplates.map((template) => {
+          if (!templateIdsToMove.has(template.id)) {
+            return template
+          }
+
+          movedCount += 1
+
+          return {
+            ...template,
+            categoryId: targetCategoryId,
+            updatedAt: now
+          }
+        })
+      })
+
+      return movedCount
+    }
+  )
+
   ipcMain.handle('image-tool:list-prompt-template-categories', async (): Promise<PromptTemplateCategory[]> => {
     const data = await readImageToolData()
     return data.promptTemplateCategories
@@ -2287,6 +2608,7 @@ const registerImageToolIpc = (): void => {
     const totalResult: ImageToolPromptTemplateImportResult = {
       imported: 0,
       skipped: 0,
+      updated: 0,
       errors: []
     }
 
@@ -2294,6 +2616,7 @@ const registerImageToolIpc = (): void => {
       const result = await importPromptTemplateFileAtPath(join(getPromptLibraryImportsDir(), fileName))
       totalResult.imported += result.imported
       totalResult.skipped += result.skipped
+      totalResult.updated = (totalResult.updated ?? 0) + (result.updated ?? 0)
       totalResult.errors.push(...result.errors)
     }
 
@@ -2314,6 +2637,31 @@ const registerImageToolIpc = (): void => {
       return writePromptTemplateExport(
         createExportFileName(template.title, '.image-prompt-template.json'),
         createImagePromptTemplateExport(exportRecord)
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'image-tool:export-prompt-templates',
+    async (_event, templateIds: string[]): Promise<ImageToolPromptTemplateExportResult> => {
+      const data = await readImageToolData()
+      const templateIdsToExport = new Set(templateIds.filter((templateId) => typeof templateId === 'string'))
+      const templates = await Promise.all(
+        data.promptTemplates
+          .filter((template) => templateIdsToExport.has(template.id))
+          .map((template) => toPromptTemplateImportRecord(template, data.promptTemplateCategories))
+      )
+
+      if (templates.length === 0) {
+        throw new ImageToolMainError('prompt_template_not_found', 'Prompt template was not found.')
+      }
+
+      return writePromptTemplateExport(
+        createExportFileName('selected-prompt-templates', '.image-prompt-pack.json'),
+        createImagePromptPackExport({
+          name: 'Selected prompt templates',
+          templates
+        })
       )
     }
   )

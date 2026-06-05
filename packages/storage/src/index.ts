@@ -136,8 +136,11 @@ export type PromptTemplate = {
 }
 
 export type PromptTemplatePreviewImage = {
-  mimeType: string
-  dataUrl: string
+  mimeType?: string
+  dataUrl?: string
+  fileName?: string
+  path?: string
+  assetId?: string
 }
 
 export type PromptTemplateImportRecord = Omit<
@@ -150,6 +153,7 @@ export type PromptTemplateImportRecord = Omit<
   templateType: PromptTemplateType
   prompt: string
   previewImage?: PromptTemplatePreviewImage
+  previewImageFile?: string
   createdAt?: string
   updatedAt?: string
 }
@@ -1321,16 +1325,29 @@ const sanitizePromptTemplateImportRecord = (template: unknown): PromptTemplateIm
   const categoryPath = Array.isArray(template.categoryPath)
     ? sanitizeStringList(template.categoryPath)?.slice(0, 12)
     : undefined
-  const previewImage = isRecord(template.previewImage)
-    ? {
-        mimeType: stringOrDefault(template.previewImage.mimeType, '').trim(),
-        dataUrl: stringOrDefault(template.previewImage.dataUrl, '').trim()
-      }
-    : undefined
+  const rawPreviewImage = isRecord(template.previewImage) ? template.previewImage : undefined
+  const previewImageDataUrl = stringOrDefault(rawPreviewImage?.dataUrl, '').trim()
+  const previewImageMimeType = stringOrDefault(rawPreviewImage?.mimeType, '').trim()
+  const previewImageFileName = stringOrDefault(rawPreviewImage?.fileName, '').trim()
+  const previewImagePath = stringOrDefault(rawPreviewImage?.path, '').trim()
+  const previewImageAssetId = stringOrDefault(rawPreviewImage?.assetId, '').trim()
+  const topLevelPreviewImageFile = stringOrDefault(
+    template.previewImageFile ?? template.previewImagePath ?? template.previewAssetId,
+    ''
+  ).trim()
   const sanitizedPreviewImage =
-    previewImage?.mimeType.startsWith('image/') && previewImage.dataUrl.startsWith('data:image/')
-      ? previewImage
-      : undefined
+    previewImageDataUrl.startsWith('data:image/') && previewImageMimeType.startsWith('image/')
+      ? {
+          mimeType: previewImageMimeType,
+          dataUrl: previewImageDataUrl
+        }
+      : previewImageFileName || previewImagePath || previewImageAssetId
+        ? {
+            ...(previewImageFileName ? { fileName: previewImageFileName } : {}),
+            ...(previewImagePath ? { path: previewImagePath } : {}),
+            ...(previewImageAssetId ? { assetId: previewImageAssetId } : {})
+          }
+        : undefined
 
   return {
     ...(typeof template.id === 'string' ? { id: template.id } : {}),
@@ -1350,6 +1367,7 @@ const sanitizePromptTemplateImportRecord = (template: unknown): PromptTemplateIm
       : {}),
     ...(typeof template.isFavorite === 'boolean' ? { isFavorite: template.isFavorite } : {}),
     ...(sanitizedPreviewImage ? { previewImage: sanitizedPreviewImage } : {}),
+    ...(topLevelPreviewImageFile ? { previewImageFile: topLevelPreviewImageFile } : {}),
     ...(typeof template.createdAt === 'string' ? { createdAt: template.createdAt } : {}),
     ...(typeof template.updatedAt === 'string' ? { updatedAt: template.updatedAt } : {})
   }

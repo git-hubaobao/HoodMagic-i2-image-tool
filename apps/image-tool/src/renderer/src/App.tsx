@@ -93,6 +93,8 @@ type ImageToolApi = {
   listPromptTemplates: () => Promise<ImageToolPromptTemplate[]>
   savePromptTemplate: (template: ImageToolPromptTemplateInput) => Promise<ImageToolPromptTemplate>
   deletePromptTemplate: (templateId: string) => Promise<void>
+  deletePromptTemplates: (templateIds: string[]) => Promise<number>
+  movePromptTemplatesToCategory: (templateIds: string[], categoryId: string | null) => Promise<number>
   listPromptTemplateCategories: () => Promise<ImageToolPromptTemplateCategory[]>
   savePromptTemplateCategory: (
     category: ImageToolPromptTemplateCategoryInput
@@ -105,6 +107,7 @@ type ImageToolApi = {
   ) => Promise<ImageToolPromptTemplateImportResult>
   getFilePath: (file: File) => string
   exportPromptTemplate: (templateId: string) => Promise<ImageToolPromptTemplateExportResult>
+  exportPromptTemplates: (templateIds: string[]) => Promise<ImageToolPromptTemplateExportResult>
   exportPromptTemplateCategory: (categoryId: string) => Promise<ImageToolPromptTemplateExportResult>
   exportAllPromptTemplates: () => Promise<ImageToolPromptTemplateExportResult>
   scanPromptTemplateImports: () => Promise<ImageToolPromptTemplateImportResult>
@@ -581,6 +584,18 @@ const enCopy = {
   effectImage: 'Preview',
   noTemplates: 'No templates',
   noPreview: 'No preview',
+  selectTemplate: 'Select template',
+  selectAllVisibleTemplates: 'Select visible',
+  clearVisibleTemplateSelection: 'Unselect visible',
+  clearTemplateSelection: 'Clear selection',
+  selectedTemplates: '{count} selected',
+  moveSelectedTemplates: 'Move',
+  exportSelectedTemplates: 'Export selected',
+  deleteSelectedTemplates: 'Delete selected',
+  moveToCategory: 'Move to category',
+  confirmDeleteSelectedPromptTemplates: 'Delete {count} selected prompt templates?',
+  selectedTemplatesMoved: 'Moved {count} templates.',
+  selectedTemplatesDeleted: 'Deleted {count} templates.',
   title: 'Title',
   description: 'Description',
   category: 'Category',
@@ -612,7 +627,7 @@ const enCopy = {
   templateSaved: 'Template saved.',
   templateDeleted: 'Template deleted.',
   templateExported: 'Template exported: {fileName}',
-  templateImportSuccess: 'Imported {imported} templates. Skipped {skipped}.',
+  templateImportSuccess: 'Imported {imported} templates. Updated {updated}. Skipped {skipped}.',
   templateImportFailed: 'Template import failed: {reason}',
   folderOpened: 'Template folder opened.',
   importFileNeedsPath: 'This file picker did not provide a file path. Copy the file to imports and scan it.',
@@ -900,6 +915,18 @@ const zhCopy: CopyText = {
   effectImage: '效果图',
   noTemplates: '暂无模板',
   noPreview: '暂无效果图',
+  selectTemplate: '选择模板',
+  selectAllVisibleTemplates: '全选当前',
+  clearVisibleTemplateSelection: '取消当前选择',
+  clearTemplateSelection: '清空选择',
+  selectedTemplates: '已选 {count} 个',
+  moveSelectedTemplates: '移动',
+  exportSelectedTemplates: '导出已选',
+  deleteSelectedTemplates: '删除已选',
+  moveToCategory: '移动到分类',
+  confirmDeleteSelectedPromptTemplates: '确定删除选中的 {count} 个提示词模板吗？',
+  selectedTemplatesMoved: '已移动 {count} 个模板。',
+  selectedTemplatesDeleted: '已删除 {count} 个模板。',
   title: '标题',
   description: '描述',
   category: '分类',
@@ -930,7 +957,7 @@ const zhCopy: CopyText = {
   templateSaved: '模板已保存。',
   templateDeleted: '模板已删除。',
   templateExported: '模板已导出：{fileName}',
-  templateImportSuccess: '模板导入成功：导入 {imported} 个，跳过 {skipped} 个。',
+  templateImportSuccess: '模板导入成功：导入 {imported} 个，更新 {updated} 个，跳过 {skipped} 个。',
   templateImportFailed: '模板导入失败：{reason}',
   folderOpened: '模板文件夹已打开。',
   importFileNeedsPath: '当前文件选择器没有提供文件路径，请复制到 imports 文件夹后扫描导入。',
@@ -2633,6 +2660,7 @@ const formatPromptTemplateImportResult = (
 
   return text.templateImportSuccess
     .replace('{imported}', String(result.imported))
+    .replace('{updated}', String(result.updated ?? 0))
     .replace('{skipped}', String(result.skipped))
 }
 
@@ -3113,6 +3141,7 @@ export function App(): React.JSX.Element {
   const [selectedPromptTemplateCategoryId, setSelectedPromptTemplateCategoryId] = useState<string>('all')
   const [promptTemplateSearch, setPromptTemplateSearch] = useState('')
   const [promptTemplateTypeFilter, setPromptTemplateTypeFilter] = useState<PromptTemplateTypeFilter>('all')
+  const [selectedPromptTemplateIds, setSelectedPromptTemplateIds] = useState<Set<string>>(() => new Set())
   const [promptTemplateEditorDraft, setPromptTemplateEditorDraft] = useState<PromptTemplateEditorDraft>()
   const [promptTemplateCategoryDialog, setPromptTemplateCategoryDialog] = useState<PromptTemplateCategoryDialogState>()
   const [promptTemplateVariableDialog, setPromptTemplateVariableDialog] = useState<PromptTemplateVariableDialogState>()
@@ -3314,6 +3343,13 @@ export function App(): React.JSX.Element {
       return matchesCategory && matchesType && matchesSearch
     })
   }, [promptTemplateSearch, promptTemplateTypeFilter, promptTemplates, selectedPromptTemplateCategoryId])
+  const selectedVisiblePromptTemplateIds = useMemo(
+    () => filteredPromptTemplates.filter((template) => selectedPromptTemplateIds.has(template.id)).map((template) => template.id),
+    [filteredPromptTemplates, selectedPromptTemplateIds]
+  )
+  const selectedPromptTemplateCount = selectedPromptTemplateIds.size
+  const areAllVisiblePromptTemplatesSelected =
+    filteredPromptTemplates.length > 0 && selectedVisiblePromptTemplateIds.length === filteredPromptTemplates.length
 
   useEffect(() => {
     return () => {
@@ -3322,6 +3358,15 @@ export function App(): React.JSX.Element {
       }
     }
   }, [])
+
+  useEffect(() => {
+    const templateIds = new Set(promptTemplates.map((template) => template.id))
+
+    setSelectedPromptTemplateIds((currentIds) => {
+      const nextIds = new Set([...currentIds].filter((templateId) => templateIds.has(templateId)))
+      return nextIds.size === currentIds.size ? currentIds : nextIds
+    })
+  }, [promptTemplates])
 
   const isNearConversationEnd = useCallback((): boolean => {
     const conversationElement = conversationScrollRef.current
@@ -5075,6 +5120,110 @@ export function App(): React.JSX.Element {
     setPromptLibraryStatus(currentCopy.templateDeleted)
   }
 
+  const togglePromptTemplateSelection = (templateId: string, selected: boolean) => {
+    setSelectedPromptTemplateIds((currentIds) => {
+      const nextIds = new Set(currentIds)
+
+      if (selected) {
+        nextIds.add(templateId)
+      } else {
+        nextIds.delete(templateId)
+      }
+
+      return nextIds
+    })
+  }
+
+  const toggleVisiblePromptTemplateSelection = () => {
+    setSelectedPromptTemplateIds((currentIds) => {
+      const nextIds = new Set(currentIds)
+
+      if (areAllVisiblePromptTemplatesSelected) {
+        for (const template of filteredPromptTemplates) {
+          nextIds.delete(template.id)
+        }
+      } else {
+        for (const template of filteredPromptTemplates) {
+          nextIds.add(template.id)
+        }
+      }
+
+      return nextIds
+    })
+  }
+
+  const clearPromptTemplateSelection = () => {
+    setSelectedPromptTemplateIds(new Set())
+  }
+
+  const handleDeleteSelectedPromptTemplates = async () => {
+    const templateIds = [...selectedPromptTemplateIds]
+
+    if (templateIds.length === 0) {
+      return
+    }
+
+    const confirmed = await requestConfirmation({
+      message: currentCopy.confirmDeleteSelectedPromptTemplates.replace('{count}', String(templateIds.length)),
+      title: currentCopy.deleteSelectedTemplates
+    })
+
+    if (!confirmed) {
+      return
+    }
+
+    const imageToolApi = getImageToolApi()
+
+    if (!hasImageToolBridge(imageToolApi)) {
+      setPromptLibraryStatus(currentCopy.missingBridge)
+      return
+    }
+
+    const deletedCount = await imageToolApi.deletePromptTemplates(templateIds)
+    setSelectedPromptTemplateIds(new Set())
+    setPromptLibraryStatus(currentCopy.selectedTemplatesDeleted.replace('{count}', String(deletedCount)))
+    await loadPromptTemplateLibrary()
+  }
+
+  const handleMoveSelectedPromptTemplates = async (categoryId: string) => {
+    const templateIds = [...selectedPromptTemplateIds]
+
+    if (templateIds.length === 0) {
+      return
+    }
+
+    const imageToolApi = getImageToolApi()
+
+    if (!hasImageToolBridge(imageToolApi)) {
+      setPromptLibraryStatus(currentCopy.missingBridge)
+      return
+    }
+
+    const movedCount = await imageToolApi.movePromptTemplatesToCategory(templateIds, categoryId)
+    setSelectedPromptTemplateIds(new Set())
+    setSelectedPromptTemplateCategoryId(categoryId)
+    setPromptLibraryStatus(currentCopy.selectedTemplatesMoved.replace('{count}', String(movedCount)))
+    await loadPromptTemplateLibrary()
+  }
+
+  const handleExportSelectedPromptTemplates = async () => {
+    const templateIds = [...selectedPromptTemplateIds]
+
+    if (templateIds.length === 0) {
+      return
+    }
+
+    const imageToolApi = getImageToolApi()
+
+    if (!hasImageToolBridge(imageToolApi)) {
+      setPromptLibraryStatus(currentCopy.missingBridge)
+      return
+    }
+
+    const result = await imageToolApi.exportPromptTemplates(templateIds)
+    setPromptLibraryStatus(currentCopy.templateExported.replace('{fileName}', result.fileName))
+  }
+
   const handleExportPromptTemplate = async (template: ImageToolPromptTemplate) => {
     const imageToolApi = getImageToolApi()
 
@@ -5088,7 +5237,7 @@ export function App(): React.JSX.Element {
   }
 
   const handlePromptTemplateImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.currentTarget.files?.[0] as (File & { path?: string }) | undefined
+    const files = Array.from(event.currentTarget.files ?? []) as (File & { path?: string })[]
     event.currentTarget.value = ''
 
     const imageToolApi = getImageToolApi()
@@ -5098,25 +5247,31 @@ export function App(): React.JSX.Element {
       return
     }
 
-    const filePath = file ? imageToolApi.getFilePath(file) || file.path : undefined
-
-    if (!filePath && !file) {
+    if (files.length === 0) {
       setPromptLibraryStatus(currentCopy.importFileNeedsPath)
       return
     }
 
-    let result: ImageToolPromptTemplateImportResult
-
-    if (filePath) {
-      result = await imageToolApi.importPromptTemplateFile(filePath)
-    } else if (file) {
-      result = await imageToolApi.importPromptTemplateFileContent(file.name, await file.text())
-    } else {
-      setPromptLibraryStatus(currentCopy.importFileNeedsPath)
-      return
+    const totalResult: ImageToolPromptTemplateImportResult = {
+      imported: 0,
+      skipped: 0,
+      updated: 0,
+      errors: []
     }
 
-    setPromptLibraryStatus(formatPromptTemplateImportResult(result, currentCopy))
+    for (const file of files) {
+      const filePath = imageToolApi.getFilePath(file) || file.path
+      const result = filePath
+        ? await imageToolApi.importPromptTemplateFile(filePath)
+        : await imageToolApi.importPromptTemplateFileContent(file.name, await file.text())
+
+      totalResult.imported += result.imported
+      totalResult.skipped += result.skipped
+      totalResult.updated = (totalResult.updated ?? 0) + (result.updated ?? 0)
+      totalResult.errors.push(...result.errors)
+    }
+
+    setPromptLibraryStatus(formatPromptTemplateImportResult(totalResult, currentCopy))
     await loadPromptTemplateLibrary()
   }
 
@@ -6065,19 +6220,28 @@ export function App(): React.JSX.Element {
             }
             onDeleteCategory={handleDeletePromptTemplateCategory}
             onDeleteTemplate={handleDeletePromptTemplate}
+            onDeleteSelectedTemplates={handleDeleteSelectedPromptTemplates}
             onEditCategory={handleRenamePromptTemplateCategory}
             onEditTemplate={(template) => setPromptTemplateEditorDraft(createPromptTemplateEditorDraft(null, template))}
             onExportAll={handleExportAllPromptTemplates}
             onExportCategory={handleExportPromptTemplateCategory}
+            onExportSelectedTemplates={handleExportSelectedPromptTemplates}
             onExportTemplate={handleExportPromptTemplate}
             onImport={() => promptTemplateImportInputRef.current?.click()}
+            onMoveSelectedTemplates={handleMoveSelectedPromptTemplates}
             onOpenFolder={handleOpenPromptTemplateFolder}
             onScanImports={handleScanPromptTemplateImports}
             onSearchChange={setPromptTemplateSearch}
+            onSelectAllVisibleTemplates={toggleVisiblePromptTemplateSelection}
+            onSelectionChange={togglePromptTemplateSelection}
             onTypeFilterChange={setPromptTemplateTypeFilter}
             onUseTemplate={handleUsePromptTemplate}
+            onClearSelection={clearPromptTemplateSelection}
+            selectedTemplateCount={selectedPromptTemplateCount}
+            selectedTemplateIds={selectedPromptTemplateIds}
             search={promptTemplateSearch}
             selectedCategoryId={selectedPromptTemplateCategoryId}
+            visibleTemplatesAllSelected={areAllVisiblePromptTemplatesSelected}
             status={promptLibraryStatus}
             typeFilter={promptTemplateTypeFilter}
           />
@@ -6086,6 +6250,7 @@ export function App(): React.JSX.Element {
         <input
           accept=".image-prompt-template.json,.image-prompt-pack.json,application/json"
           className="reference-file-input"
+          multiple
           onChange={handlePromptTemplateImportFile}
           ref={promptTemplateImportInputRef}
           type="file"
@@ -6937,22 +7102,31 @@ function PromptLibraryPanel({
   onCreateCategory,
   onCreateTemplate,
   onDeleteCategory,
+  onDeleteSelectedTemplates,
   onDeleteTemplate,
   onEditCategory,
   onEditTemplate,
   onExportAll,
   onExportCategory,
+  onExportSelectedTemplates,
   onExportTemplate,
   onImport,
+  onMoveSelectedTemplates,
   onOpenFolder,
   onScanImports,
   onSearchChange,
+  onSelectAllVisibleTemplates,
+  onSelectionChange,
   onTypeFilterChange,
   onUseTemplate,
+  onClearSelection,
   search,
+  selectedTemplateCount,
+  selectedTemplateIds,
   selectedCategoryId,
   status,
-  typeFilter
+  typeFilter,
+  visibleTemplatesAllSelected
 }: {
   categories: ImageToolPromptTemplateCategory[]
   currentCopy: (typeof copy)[Language]
@@ -6963,25 +7137,35 @@ function PromptLibraryPanel({
   onCreateCategory: () => void
   onCreateTemplate: () => void
   onDeleteCategory: (category: ImageToolPromptTemplateCategory) => void
+  onDeleteSelectedTemplates: () => void
   onDeleteTemplate: (template: ImageToolPromptTemplate) => void
   onEditCategory: (category: ImageToolPromptTemplateCategory) => void
   onEditTemplate: (template: ImageToolPromptTemplate) => void
   onExportAll: () => void
   onExportCategory: () => void
+  onExportSelectedTemplates: () => void
   onExportTemplate: (template: ImageToolPromptTemplate) => void
   onImport: () => void
+  onMoveSelectedTemplates: (categoryId: string) => void
   onOpenFolder: () => void
   onScanImports: () => void
   onSearchChange: (value: string) => void
+  onSelectAllVisibleTemplates: () => void
+  onSelectionChange: (templateId: string, selected: boolean) => void
   onTypeFilterChange: (value: PromptTemplateTypeFilter) => void
   onUseTemplate: (template: ImageToolPromptTemplate) => void
+  onClearSelection: () => void
   search: string
+  selectedTemplateCount: number
+  selectedTemplateIds: ReadonlySet<string>
   selectedCategoryId: string
   status?: string
   typeFilter: PromptTemplateTypeFilter
+  visibleTemplatesAllSelected: boolean
 }): React.JSX.Element {
   const selectedCategory = categories.find((category) => category.id === selectedCategoryId)
   const canEditSelectedCategory = Boolean(selectedCategory && selectedCategory.id !== PROMPT_TEMPLATE_UNCATEGORIZED_ID)
+  const hasSelectedTemplates = selectedTemplateCount > 0
 
   return (
     <div className="prompt-library-backdrop" role="presentation">
@@ -7081,6 +7265,65 @@ function PromptLibraryPanel({
                 {currentCopy.openTemplateFolder}
               </button>
             </div>
+            <div className="prompt-template-bulk-actions">
+              <button
+                className="secondary-button"
+                disabled={filteredTemplates.length === 0}
+                onClick={onSelectAllVisibleTemplates}
+                type="button"
+              >
+                {visibleTemplatesAllSelected
+                  ? currentCopy.clearVisibleTemplateSelection
+                  : currentCopy.selectAllVisibleTemplates}
+              </button>
+              <span className="prompt-template-selection-count">
+                {currentCopy.selectedTemplates.replace('{count}', String(selectedTemplateCount))}
+              </span>
+              <select
+                aria-label={currentCopy.moveToCategory}
+                disabled={!hasSelectedTemplates}
+                onChange={(event) => {
+                  const categoryId = event.currentTarget.value
+                  event.currentTarget.value = ''
+
+                  if (categoryId) {
+                    onMoveSelectedTemplates(categoryId)
+                  }
+                }}
+                value=""
+              >
+                <option value="">{currentCopy.moveSelectedTemplates}</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.id === PROMPT_TEMPLATE_UNCATEGORIZED_ID ? currentCopy.uncategorized : category.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="secondary-button"
+                disabled={!hasSelectedTemplates}
+                onClick={onExportSelectedTemplates}
+                type="button"
+              >
+                {currentCopy.exportSelectedTemplates}
+              </button>
+              <button
+                className="secondary-button danger-subtle-button"
+                disabled={!hasSelectedTemplates}
+                onClick={onDeleteSelectedTemplates}
+                type="button"
+              >
+                {currentCopy.deleteSelectedTemplates}
+              </button>
+              <button
+                className="secondary-button"
+                disabled={!hasSelectedTemplates}
+                onClick={onClearSelection}
+                type="button"
+              >
+                {currentCopy.clearTemplateSelection}
+              </button>
+            </div>
             {status && <p className="prompt-library-status">{status}</p>}
             {filteredTemplates.length === 0 ? (
               <p className="prompt-template-empty">{currentCopy.noTemplates}</p>
@@ -7091,10 +7334,12 @@ function PromptLibraryPanel({
                     key={template.id}
                     template={template}
                     text={currentCopy}
+                    isSelected={selectedTemplateIds.has(template.id)}
                     onCopy={onCopyTemplate}
                     onDelete={onDeleteTemplate}
                     onEdit={onEditTemplate}
                     onExport={onExportTemplate}
+                    onSelectionChange={onSelectionChange}
                     onUse={onUseTemplate}
                   />
                 ))}
@@ -7108,18 +7353,22 @@ function PromptLibraryPanel({
 }
 
 function PromptTemplateCard({
+  isSelected,
   onCopy,
   onDelete,
   onEdit,
   onExport,
+  onSelectionChange,
   onUse,
   template,
   text
 }: {
+  isSelected: boolean
   onCopy: (template: ImageToolPromptTemplate) => void
   onDelete: (template: ImageToolPromptTemplate) => void
   onEdit: (template: ImageToolPromptTemplate) => void
   onExport: (template: ImageToolPromptTemplate) => void
+  onSelectionChange: (templateId: string, selected: boolean) => void
   onUse: (template: ImageToolPromptTemplate) => void
   template: ImageToolPromptTemplate
   text: (typeof copy)[Language]
@@ -7130,7 +7379,15 @@ function PromptTemplateCard({
   const hiddenTagCount = Math.max((template.tags?.length ?? 0) - visibleTags.length, 0)
 
   return (
-    <article className="prompt-template-card">
+    <article className={isSelected ? 'prompt-template-card is-selected' : 'prompt-template-card'}>
+      <label className="prompt-template-card-select">
+        <input
+          checked={isSelected}
+          onChange={(event) => onSelectionChange(template.id, event.currentTarget.checked)}
+          type="checkbox"
+        />
+        <span>{text.selectTemplate}</span>
+      </label>
       <div className="prompt-template-preview">
         {template.previewDataUrl ? (
           <img alt={template.title} src={template.previewDataUrl} />

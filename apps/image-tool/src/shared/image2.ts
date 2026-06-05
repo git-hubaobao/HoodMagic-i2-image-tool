@@ -281,6 +281,7 @@ export type ImageToolPromptTemplateImportError = {
 export type ImageToolPromptTemplateImportResult = {
   imported: number
   skipped: number
+  updated?: number
   errors: ImageToolPromptTemplateImportError[]
 }
 
