@@ -180,17 +180,6 @@ HoodMagic-i2-Setup-1.0.0.exe
 
 API Key 应在应用设置界面中配置。本地运行数据由 Electron 的用户数据目录管理，仓库中的 `.env.example` 只作为安全提示，不包含真实密钥。
 
-## 文档索引
-
-- [开发说明](docs/DEVELOPMENT.md)
-- [架构说明](docs/ARCHITECTURE.md)
-- [发布说明](docs/RELEASE.md)
-- [API 模板说明](docs/API_TEMPLATE.md)
-- [图片编辑说明](docs/IMAGE_EDITING.md)
-- [提示词模板库说明](docs/PROMPT_LIBRARY.md)
-- [排障说明](docs/TROUBLESHOOTING.md)
-- [AI 上下文说明](docs/AI_CONTEXT.md)
-
 ## 常见问题
 
 ### 启动后无法生成图片
