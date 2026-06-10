@@ -5,8 +5,8 @@ import {
   resolveImageSize
 } from '@hoodmagic/model-core'
 import {
-  type ClipboardEvent,
   type ChangeEvent,
+  type ClipboardEvent,
   type CSSProperties,
   type DragEvent,
   type FormEvent,
@@ -51,8 +51,12 @@ import type {
   ImageToolReferenceImage,
   ImageToolSaveImageResultAsPromptTemplateInput,
   ImageToolSessionState,
+  ImageToolTaskRecord,
+  ImageToolTaskRecordFilters,
+  ImageToolTaskUsageSnapshot,
   ImageToolTestConnectionRequest,
-  ImageToolTestConnectionResult
+  ImageToolTestConnectionResult,
+  ImageToolUsagePriceSettings
 } from '../../shared/image2'
 import {
   getImageProviderTemplate,
@@ -73,6 +77,10 @@ type ImageToolApi = {
   createImageEditTask: (request: ImageToolEditImage2Request) => Promise<ImageToolImageTask>
   getImageTask: (taskId: string) => Promise<ImageToolImageTask | undefined>
   listImageTasks: () => Promise<ImageToolImageTask[]>
+  listTaskUsage: (filters?: ImageToolTaskRecordFilters) => Promise<ImageToolTaskUsageSnapshot>
+  saveUsagePriceSettings: (settings: ImageToolUsagePriceSettings) => Promise<ImageToolPersistedSettings>
+  clearTaskUsage: () => Promise<ImageToolTaskUsageSnapshot>
+  exportTaskUsageCsv: (filters?: ImageToolTaskRecordFilters) => Promise<ImageToolPromptTemplateExportResult>
   onImageTaskEvent: (callback: ImageToolImageTaskEventCallback) => () => void
   getSessionState: () => Promise<ImageToolSessionState>
   createConversation: (projectId?: string | null) => Promise<ImageToolSessionState>
@@ -130,6 +138,10 @@ const hasImageToolBridge = (api: ImageToolApi | undefined): api is ImageToolApi 
       typeof api.createImageEditTask === 'function' &&
       typeof api.getImageTask === 'function' &&
       typeof api.listImageTasks === 'function' &&
+      typeof api.listTaskUsage === 'function' &&
+      typeof api.saveUsagePriceSettings === 'function' &&
+      typeof api.clearTaskUsage === 'function' &&
+      typeof api.exportTaskUsageCsv === 'function' &&
       typeof api.onImageTaskEvent === 'function' &&
       typeof api.getSessionState === 'function' &&
       typeof api.createConversation === 'function' &&
@@ -394,6 +406,18 @@ type TextInputDialogState = {
   requiredMessage: string
   title: string
   value: string
+}
+
+type UsageProviderFilter = 'all' | 'deleted' | string
+type UsageStatusFilter = 'all' | ImageToolTaskRecord['status']
+type UsageTypeFilter = 'all' | ImageToolTaskRecord['taskType']
+type UsageTimeRangeFilter = 'all' | 'today' | '7d' | '30d'
+
+type UsageFilters = {
+  providerTemplateId: UsageProviderFilter
+  status: UsageStatusFilter
+  taskType: UsageTypeFilter
+  timeRange: UsageTimeRangeFilter
 }
 
 const CUSTOM_LOGO_STORAGE_KEY = 'image-tool:custom-logo-data-url'
@@ -768,6 +792,55 @@ const enCopy = {
   connectionMessage: 'message',
   connectionRequestSummary: 'requestSummary',
   settingsSaved: 'Settings saved',
+  tasksUsage: 'Tasks / Usage Cost',
+  usageTitle: 'Tasks / Usage Cost',
+  usageStatsTotalTasks: 'Total tasks',
+  usageStatsSucceededTasks: 'Succeeded',
+  usageStatsFailedTasks: 'Failed',
+  usageStatsRunningTasks: 'Running',
+  usageStatsSuccessfulImages: 'Images',
+  usageStatsTotalCost: 'Total cost',
+  usagePriceSettings: 'Price settings',
+  usageDefaultUnitPrice: 'Default unit price',
+  usageCurrentProviderUnitPrice: 'Current API unit price',
+  usageUnitLabel: 'CNY / image',
+  usageSavePrices: 'Save prices',
+  usagePricesSaved: 'Prices saved. New tasks will use the new price.',
+  usageInvalidPrice: 'Price must be a number greater than or equal to 0.',
+  usageFilters: 'Filters',
+  usageAllApis: 'All APIs',
+  usageDeletedApis: 'Deleted APIs',
+  usageAllStatuses: 'All statuses',
+  usageAllTypes: 'All types',
+  usageAllTime: 'All time',
+  usageToday: 'Today',
+  usageLast7Days: 'Last 7 days',
+  usageLast30Days: 'Last 30 days',
+  usageStatusQueued: 'Queued',
+  usageStatusRunning: 'Running',
+  usageStatusSucceeded: 'Succeeded',
+  usageStatusFailed: 'Failed',
+  usageStatusCanceled: 'Canceled',
+  usageTypeTextToImage: 'Text to image',
+  usageTypeImageToImage: 'Image to image',
+  usageTypeImageEdit: 'Image edit',
+  usageTableTime: 'Time',
+  usageTableApi: 'API',
+  usageTableType: 'Type',
+  usageTableStatus: 'Status',
+  usageTableModel: 'Model',
+  usageTableSize: 'Size',
+  usageTableImages: 'Images',
+  usageTableUnitPrice: 'Unit price',
+  usageTableCost: 'Cost',
+  usageTableConversation: 'Chat/Project',
+  usageTableError: 'Error',
+  usageEmpty: 'No task records yet.',
+  usageExportCsv: 'Export CSV',
+  usageCsvExported: 'CSV exported: {fileName}',
+  usageClear: 'Clear records',
+  usageConfirmClear: 'Clear task usage records only? Chats, images, templates, and API settings will stay.',
+  usageEstimatedCostHint: 'Estimated only',
   deleteHistory: 'Delete history',
   regenerate: 'Regenerate',
   language: 'Language',
@@ -1096,6 +1169,55 @@ const zhCopy: CopyText = {
   connectionMessage: '消息',
   connectionRequestSummary: '请求摘要',
   settingsSaved: '设置已保存',
+  tasksUsage: '任务列表 / 消费统计',
+  usageTitle: '任务列表 / 消费统计',
+  usageStatsTotalTasks: '总任务数',
+  usageStatsSucceededTasks: '成功任务',
+  usageStatsFailedTasks: '失败任务',
+  usageStatsRunningTasks: '运行中',
+  usageStatsSuccessfulImages: '成功图片',
+  usageStatsTotalCost: '总消费',
+  usagePriceSettings: '价格设置',
+  usageDefaultUnitPrice: '默认单张价格',
+  usageCurrentProviderUnitPrice: '当前 API 模板单价',
+  usageUnitLabel: '元/张',
+  usageSavePrices: '保存价格',
+  usagePricesSaved: '价格已保存，新任务将使用新价格。',
+  usageInvalidPrice: '单价必须是大于等于 0 的数字。',
+  usageFilters: '筛选',
+  usageAllApis: '全部 API',
+  usageDeletedApis: '已删除模板',
+  usageAllStatuses: '全部状态',
+  usageAllTypes: '全部类型',
+  usageAllTime: '全部时间',
+  usageToday: '今天',
+  usageLast7Days: '最近 7 天',
+  usageLast30Days: '最近 30 天',
+  usageStatusQueued: '排队中',
+  usageStatusRunning: '生成中',
+  usageStatusSucceeded: '成功',
+  usageStatusFailed: '失败',
+  usageStatusCanceled: '已取消',
+  usageTypeTextToImage: '文生图',
+  usageTypeImageToImage: '图生图',
+  usageTypeImageEdit: '图片编辑',
+  usageTableTime: '时间',
+  usageTableApi: 'API 模板',
+  usageTableType: '类型',
+  usageTableStatus: '状态',
+  usageTableModel: '模型',
+  usageTableSize: '尺寸',
+  usageTableImages: '图片数',
+  usageTableUnitPrice: '单价',
+  usageTableCost: '费用',
+  usageTableConversation: '会话/项目',
+  usageTableError: '错误摘要',
+  usageEmpty: '暂无任务记录',
+  usageExportCsv: '导出 CSV',
+  usageCsvExported: 'CSV 已导出：{fileName}',
+  usageClear: '清空记录',
+  usageConfirmClear: '只清空任务统计记录？会话、图片历史、提示词模板和 API 设置不会删除。',
+  usageEstimatedCostHint: '预计费用',
   deleteHistory: '删除记录',
   regenerate: '重新生成',
   language: '语言',
@@ -1302,6 +1424,124 @@ const formatConversationTime = (value: string | undefined, language: Language): 
     hour: '2-digit',
     minute: '2-digit'
   }).format(new Date(timestamp))
+}
+
+const formatFullDateTime = (value: string | undefined, language: Language): string => {
+  if (!value) {
+    return ''
+  }
+
+  const timestamp = Date.parse(value)
+
+  if (!Number.isFinite(timestamp)) {
+    return ''
+  }
+
+  return new Intl.DateTimeFormat(language === 'zh' ? 'zh-CN' : 'en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(timestamp))
+}
+
+const formatCurrencyCny = (value: number): string => `¥${Number.isFinite(value) ? value.toFixed(2) : '0.00'}`
+
+const formatUnitPrice = (value: number): string =>
+  `¥${Number.isFinite(value) ? value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') : '0'}`
+
+const normalizeUnitPriceInput = (value: string): number | undefined => {
+  const trimmedValue = value.trim()
+
+  if (!trimmedValue) {
+    return undefined
+  }
+
+  const unitPrice = Number(trimmedValue)
+
+  if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+    return undefined
+  }
+
+  return Math.round(unitPrice * 10000) / 10000
+}
+
+const getUsageDateRange = (
+  timeRange: UsageTimeRangeFilter
+): Pick<ImageToolTaskRecordFilters, 'createdAtFrom' | 'createdAtTo'> => {
+  if (timeRange === 'all') {
+    return {}
+  }
+
+  const now = new Date()
+  const start = new Date(now)
+
+  if (timeRange === 'today') {
+    start.setHours(0, 0, 0, 0)
+  } else {
+    const days = timeRange === '7d' ? 7 : 30
+    start.setDate(start.getDate() - days + 1)
+    start.setHours(0, 0, 0, 0)
+  }
+
+  return {
+    createdAtFrom: start.toISOString(),
+    createdAtTo: now.toISOString()
+  }
+}
+
+const createUsageRecordFilters = (
+  filters: UsageFilters,
+  templates: readonly ImageProviderTemplate[]
+): ImageToolTaskRecordFilters => {
+  const dateRange = getUsageDateRange(filters.timeRange)
+  const providerTemplateIds = templates.map((template) => template.id)
+
+  return {
+    ...dateRange,
+    ...(filters.providerTemplateId === 'deleted'
+      ? {
+          deletedProviderTemplatesOnly: true,
+          existingProviderTemplateIds: providerTemplateIds
+        }
+      : filters.providerTemplateId === 'all'
+        ? {}
+        : { providerTemplateId: filters.providerTemplateId }),
+    ...(filters.status === 'all' ? {} : { status: filters.status }),
+    ...(filters.taskType === 'all' ? {} : { taskType: filters.taskType })
+  }
+}
+
+const getUsageTaskTypeLabel = (taskType: ImageToolTaskRecord['taskType'], text: (typeof copy)[Language]): string => {
+  if (taskType === 'image_edit') {
+    return text.usageTypeImageEdit
+  }
+
+  if (taskType === 'image_to_image') {
+    return text.usageTypeImageToImage
+  }
+
+  return text.usageTypeTextToImage
+}
+
+const getUsageStatusLabel = (status: ImageToolTaskRecord['status'], text: (typeof copy)[Language]): string => {
+  if (status === 'queued') {
+    return text.usageStatusQueued
+  }
+
+  if (status === 'running') {
+    return text.usageStatusRunning
+  }
+
+  if (status === 'succeeded') {
+    return text.usageStatusSucceeded
+  }
+
+  if (status === 'failed') {
+    return text.usageStatusFailed
+  }
+
+  return text.usageStatusCanceled
 }
 
 const getConversationDisplayTitle = (conversation: ImageToolConversation, text: (typeof copy)[Language]): string => {
@@ -3116,8 +3356,33 @@ export function App(): React.JSX.Element {
   const [customProviderTemplates, setCustomProviderTemplates] = useState<ImageProviderTemplate[]>([])
   const [providerCredentials, setProviderCredentials] = useState<ImageToolPersistedSettings['providerCredentials']>({})
   const [saveApiKey, setSaveApiKey] = useState(false)
+  const [defaultUnitPrice, setDefaultUnitPrice] = useState(0.06)
+  const [currency, setCurrency] = useState<ImageToolUsagePriceSettings['currency']>('CNY')
+  const [providerUnitPrices, setProviderUnitPrices] = useState<Record<string, number>>({})
   const [appearanceTheme, setAppearanceTheme] = useState<AppearanceTheme>('dark')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
+  const [usageSnapshot, setUsageSnapshot] = useState<ImageToolTaskUsageSnapshot>({
+    records: [],
+    stats: {
+      totalTasks: 0,
+      succeededTasks: 0,
+      failedTasks: 0,
+      runningTasks: 0,
+      successfulImages: 0,
+      totalCost: 0,
+      currency: 'CNY'
+    }
+  })
+  const [usageFilters, setUsageFilters] = useState<UsageFilters>({
+    providerTemplateId: 'all',
+    status: 'all',
+    taskType: 'all',
+    timeRange: 'all'
+  })
+  const [usageDefaultPriceDraft, setUsageDefaultPriceDraft] = useState('0.06')
+  const [usageProviderPriceDraft, setUsageProviderPriceDraft] = useState('0.06')
+  const [usageStatus, setUsageStatus] = useState<string>()
   const [settingsDraft, setSettingsDraft] = useState<ApiSettingsDraft>(() => ({
     providerTemplateId: 'compatible-default',
     baseUrl: 'https://api.openai.com',
@@ -3298,6 +3563,19 @@ export function App(): React.JSX.Element {
     () => getProviderCredentialApiKey(providerCredentials, providerTemplateId),
     [providerCredentials, providerTemplateId]
   )
+  const currentProviderTemplate = useMemo(
+    () => getImageProviderTemplate(providerTemplateId, customProviderTemplates),
+    [customProviderTemplates, providerTemplateId]
+  )
+  const currentProviderTemplateLabel = useMemo(
+    () => getProviderTemplateLabel(currentProviderTemplate, currentCopy).name,
+    [currentCopy, currentProviderTemplate]
+  )
+  const usageTemplates = useMemo(() => getImageProviderTemplates(customProviderTemplates), [customProviderTemplates])
+  const usageRecordFilters = useMemo(
+    () => createUsageRecordFilters(usageFilters, usageTemplates),
+    [usageFilters, usageTemplates]
+  )
   const draftRequestEndpoint = useMemo(
     () => createRequestEndpoint(settingsDraft.baseUrl, settingsDraft.endpointPath),
     [settingsDraft.baseUrl, settingsDraft.endpointPath]
@@ -3344,7 +3622,10 @@ export function App(): React.JSX.Element {
     })
   }, [promptTemplateSearch, promptTemplateTypeFilter, promptTemplates, selectedPromptTemplateCategoryId])
   const selectedVisiblePromptTemplateIds = useMemo(
-    () => filteredPromptTemplates.filter((template) => selectedPromptTemplateIds.has(template.id)).map((template) => template.id),
+    () =>
+      filteredPromptTemplates
+        .filter((template) => selectedPromptTemplateIds.has(template.id))
+        .map((template) => template.id),
     [filteredPromptTemplates, selectedPromptTemplateIds]
   )
   const selectedPromptTemplateCount = selectedPromptTemplateIds.size
@@ -3571,6 +3852,8 @@ export function App(): React.JSX.Element {
         apiKey,
         baseUrl,
         endpointPath: normalizeEndpointPath(endpointPath),
+        providerTemplateId,
+        providerTemplateName: currentProviderTemplateLabel,
         ...(job.mode === 'image_generation' ? {} : { editEndpointPath: normalizeEditEndpointPath(editEndpointPath) })
       }
       const runningJob: LocalImageQueueJob = {
@@ -3632,7 +3915,15 @@ export function App(): React.JSX.Element {
         }
       })()
     }
-  }, [baseUrl, currentApiKey, currentCopy, editEndpointPath, endpointPath])
+  }, [
+    baseUrl,
+    currentApiKey,
+    currentCopy,
+    currentProviderTemplateLabel,
+    editEndpointPath,
+    endpointPath,
+    providerTemplateId
+  ])
 
   const enqueueImageJob = (job: Omit<LocalImageQueueJob, 'retryCount' | 'status'>) => {
     queuedImageJobsRef.current.push({
@@ -3708,6 +3999,21 @@ export function App(): React.JSX.Element {
       return 'all'
     })
   }
+
+  const loadTaskUsage = useCallback(
+    async (filters: ImageToolTaskRecordFilters = usageRecordFilters) => {
+      const imageToolApi = getImageToolApi()
+      setIsBridgeReady(getBridgeDiagnostics().hasBridge)
+
+      if (!hasImageToolBridge(imageToolApi)) {
+        return
+      }
+
+      const snapshot = await imageToolApi.listTaskUsage(filters)
+      setUsageSnapshot(snapshot)
+    },
+    [usageRecordFilters]
+  )
 
   const openPromptLibrary = () => {
     setIsPromptLibraryOpen(true)
@@ -3785,6 +4091,13 @@ export function App(): React.JSX.Element {
       setCustomProviderTemplates(settings.customProviderTemplates)
       setProviderCredentials(settings.providerCredentials)
       setSaveApiKey(settings.saveApiKey)
+      setDefaultUnitPrice(settings.defaultUnitPrice)
+      setCurrency(settings.currency)
+      setProviderUnitPrices(settings.providerUnitPrices)
+      setUsageDefaultPriceDraft(String(settings.defaultUnitPrice))
+      setUsageProviderPriceDraft(
+        String(settings.providerUnitPrices[settings.providerTemplateId] ?? settings.defaultUnitPrice)
+      )
       setAppearanceTheme(settings.appearanceTheme)
       setSettingsDraft(
         createApiSettingsDraft({
@@ -3838,6 +4151,16 @@ export function App(): React.JSX.Element {
   }, [collapsedProjectIds])
 
   useEffect(() => {
+    setUsageProviderPriceDraft(String(providerUnitPrices[providerTemplateId] ?? defaultUnitPrice))
+  }, [defaultUnitPrice, providerTemplateId, providerUnitPrices])
+
+  useEffect(() => {
+    if (usageOpen) {
+      void loadTaskUsage(usageRecordFilters)
+    }
+  }, [loadTaskUsage, usageOpen, usageRecordFilters])
+
+  useEffect(() => {
     if (!isLanguageMenuOpen) {
       return undefined
     }
@@ -3879,6 +4202,10 @@ export function App(): React.JSX.Element {
     setIsBridgeReady(diagnostics.hasBridge)
 
     const unsubscribe = imageToolApi?.onImageTaskEvent?.((event) => {
+      if (usageOpen) {
+        void loadTaskUsage(usageRecordFilters)
+      }
+
       const eventConversationId =
         event.task.request.conversationId ??
         taskConversationIdRef.current[event.task.id] ??
@@ -4018,7 +4345,7 @@ export function App(): React.JSX.Element {
     return () => {
       unsubscribe?.()
     }
-  }, [activeConversationId, currentCopy, processImageTaskQueue])
+  }, [activeConversationId, currentCopy, loadTaskUsage, processImageTaskQueue, usageOpen, usageRecordFilters])
 
   useEffect(() => {
     if (!lightboxMessage) {
@@ -4240,6 +4567,9 @@ export function App(): React.JSX.Element {
           baseUrl: trimmedBaseUrl,
           apiKey: trimmedApiKey,
           endpointPath: normalizeEndpointPath(endpointPath),
+          providerTemplateId,
+          providerTemplateName: currentProviderTemplateLabel,
+          projectId: activeProjectId,
           model: trimmedModel,
           prompt: trimmedPrompt,
           size: resolvedParams.size,
@@ -4261,6 +4591,9 @@ export function App(): React.JSX.Element {
         apiKey: trimmedApiKey,
         endpointPath: normalizeEndpointPath(endpointPath),
         editEndpointPath: normalizeEditEndpointPath(editEndpointPath),
+        providerTemplateId,
+        providerTemplateName: currentProviderTemplateLabel,
+        projectId: activeProjectId,
         model: trimmedModel,
         prompt: trimmedPrompt,
         size: resolvedParams.size,
@@ -5695,6 +6028,13 @@ export function App(): React.JSX.Element {
     setCustomProviderTemplates(savedSettings.customProviderTemplates)
     setProviderCredentials(savedSettings.providerCredentials)
     setSaveApiKey(savedSettings.saveApiKey)
+    setDefaultUnitPrice(savedSettings.defaultUnitPrice)
+    setCurrency(savedSettings.currency)
+    setProviderUnitPrices(savedSettings.providerUnitPrices)
+    setUsageDefaultPriceDraft(String(savedSettings.defaultUnitPrice))
+    setUsageProviderPriceDraft(
+      String(savedSettings.providerUnitPrices[savedSettings.providerTemplateId] ?? savedSettings.defaultUnitPrice)
+    )
     setAppearanceTheme(savedSettings.appearanceTheme)
     setSizeMode(savedSettings.sizeMode)
     setFixedSize(savedSettings.sizePreset as ImageSizePreset)
@@ -5764,6 +6104,88 @@ export function App(): React.JSX.Element {
     setSettingsOpen(false)
   }
 
+  const openUsagePanel = () => {
+    setUsageStatus(undefined)
+    setUsageDefaultPriceDraft(String(defaultUnitPrice))
+    setUsageProviderPriceDraft(String(providerUnitPrices[providerTemplateId] ?? defaultUnitPrice))
+    setUsageOpen(true)
+    void loadTaskUsage(usageRecordFilters)
+  }
+
+  const closeUsagePanel = () => {
+    setUsageStatus(undefined)
+    setUsageOpen(false)
+  }
+
+  const handleSaveUsagePrices = async () => {
+    const imageToolApi = getImageToolApi()
+    const diagnostics = getBridgeDiagnostics()
+    setIsBridgeReady(diagnostics.hasBridge)
+
+    if (!hasImageToolBridge(imageToolApi)) {
+      setUsageStatus(currentCopy.missingBridge)
+      return
+    }
+
+    const nextDefaultUnitPrice = normalizeUnitPriceInput(usageDefaultPriceDraft)
+    const nextProviderUnitPrice = normalizeUnitPriceInput(usageProviderPriceDraft)
+
+    if (nextDefaultUnitPrice === undefined || nextProviderUnitPrice === undefined) {
+      setUsageStatus(currentCopy.usageInvalidPrice)
+      return
+    }
+
+    const nextProviderUnitPrices = {
+      ...providerUnitPrices,
+      [providerTemplateId]: nextProviderUnitPrice
+    }
+    const savedSettings = await imageToolApi.saveUsagePriceSettings({
+      defaultUnitPrice: nextDefaultUnitPrice,
+      currency,
+      providerUnitPrices: nextProviderUnitPrices
+    })
+
+    applySavedSettings(savedSettings)
+    setUsageStatus(currentCopy.usagePricesSaved)
+    void loadTaskUsage(usageRecordFilters)
+  }
+
+  const handleExportUsageCsv = async () => {
+    const imageToolApi = getImageToolApi()
+    setIsBridgeReady(getBridgeDiagnostics().hasBridge)
+
+    if (!hasImageToolBridge(imageToolApi)) {
+      setUsageStatus(currentCopy.missingBridge)
+      return
+    }
+
+    const result = await imageToolApi.exportTaskUsageCsv(usageRecordFilters)
+    setUsageStatus(currentCopy.usageCsvExported.replace('{fileName}', result.fileName))
+  }
+
+  const handleClearUsageRecords = async () => {
+    const imageToolApi = getImageToolApi()
+    setIsBridgeReady(getBridgeDiagnostics().hasBridge)
+
+    if (!hasImageToolBridge(imageToolApi)) {
+      setUsageStatus(currentCopy.missingBridge)
+      return
+    }
+
+    const confirmed = await requestConfirmation({
+      message: currentCopy.usageConfirmClear,
+      title: currentCopy.usageClear
+    })
+
+    if (!confirmed) {
+      return
+    }
+
+    const snapshot = await imageToolApi.clearTaskUsage()
+    setUsageSnapshot(snapshot)
+    setUsageStatus(currentCopy.usageEmpty)
+  }
+
   const createCurrentSettingsSnapshot = (theme: AppearanceTheme): ImageToolPersistedSettings => ({
     appearanceTheme: theme,
     providerTemplateId,
@@ -5780,7 +6202,10 @@ export function App(): React.JSX.Element {
     sizePreset: fixedSize,
     saveApiKey,
     providerCredentials,
-    customProviderTemplates
+    customProviderTemplates,
+    defaultUnitPrice,
+    currency,
+    providerUnitPrices
   })
 
   const handleThemeChange = async (nextTheme: AppearanceTheme) => {
@@ -5848,7 +6273,10 @@ export function App(): React.JSX.Element {
       sizePreset: fixedSize,
       saveApiKey: true,
       providerCredentials: nextProviderCredentials,
-      customProviderTemplates: settingsDraft.customProviderTemplates
+      customProviderTemplates: settingsDraft.customProviderTemplates,
+      defaultUnitPrice,
+      currency,
+      providerUnitPrices
     })
 
     applySavedSettings(savedSettings)
@@ -6071,6 +6499,7 @@ export function App(): React.JSX.Element {
         onSelectConversation={handleSelectConversation}
         onSelectProject={handleSelectProject}
         onToggleProjectCollapse={handleToggleProjectCollapse}
+        onTasksUsageOpen={openUsagePanel}
         onTrashOpen={() => setIsTrashOpen(true)}
         projectRenameDraft={projectRenameDraft}
         projects={projects}
@@ -6196,6 +6625,28 @@ export function App(): React.JSX.Element {
             templateEditorDraft={templateEditorDraft}
             templateEditorStatus={templateEditorStatus}
             templates={availableTemplates}
+          />
+        )}
+
+        {usageOpen && (
+          <TaskUsagePanel
+            currentProviderTemplateId={providerTemplateId}
+            defaultUnitPriceDraft={usageDefaultPriceDraft}
+            filters={usageFilters}
+            language={language}
+            onClear={handleClearUsageRecords}
+            onClose={closeUsagePanel}
+            onDefaultUnitPriceDraftChange={setUsageDefaultPriceDraft}
+            onExportCsv={handleExportUsageCsv}
+            onFiltersChange={setUsageFilters}
+            onProviderUnitPriceDraftChange={setUsageProviderPriceDraft}
+            onSavePrices={handleSaveUsagePrices}
+            projects={projects}
+            providerUnitPriceDraft={usageProviderPriceDraft}
+            snapshot={usageSnapshot}
+            status={usageStatus}
+            text={currentCopy}
+            templates={usageTemplates}
           />
         )}
 
@@ -6672,6 +7123,7 @@ function ConversationSidebar({
   onSelectConversation,
   onSelectProject,
   onToggleProjectCollapse,
+  onTasksUsageOpen,
   onTrashOpen,
   projectRenameDraft,
   projects,
@@ -6700,6 +7152,7 @@ function ConversationSidebar({
   onSelectConversation: (conversationId: string) => void
   onSelectProject: (projectId: string | null) => void
   onToggleProjectCollapse: (projectId: string) => void
+  onTasksUsageOpen: () => void
   onTrashOpen: () => void
   projectRenameDraft: string
   projects: ImageToolProjectGroup[]
@@ -6957,6 +7410,9 @@ function ConversationSidebar({
           })
         )}
       </div>
+      <button className="trash-button" onClick={onTasksUsageOpen} title={text.tasksUsage} type="button">
+        <span>{text.tasksUsage.split(' / ')[0]}</span>
+      </button>
       <button className="trash-button" onClick={onTrashOpen} type="button">
         <span>{text.trash}</span>
         <strong>{trashCount}</strong>
@@ -8337,6 +8793,258 @@ function ApiSettingsDrawer({
           </button>
         </div>
       </aside>
+    </div>
+  )
+}
+
+function TaskUsagePanel({
+  currentProviderTemplateId,
+  defaultUnitPriceDraft,
+  filters,
+  language,
+  onClear,
+  onClose,
+  onDefaultUnitPriceDraftChange,
+  onExportCsv,
+  onFiltersChange,
+  onProviderUnitPriceDraftChange,
+  onSavePrices,
+  projects,
+  providerUnitPriceDraft,
+  snapshot,
+  status,
+  templates,
+  text
+}: {
+  currentProviderTemplateId: string
+  defaultUnitPriceDraft: string
+  filters: UsageFilters
+  language: Language
+  onClear: () => void
+  onClose: () => void
+  onDefaultUnitPriceDraftChange: (value: string) => void
+  onExportCsv: () => void
+  onFiltersChange: (filters: UsageFilters) => void
+  onProviderUnitPriceDraftChange: (value: string) => void
+  onSavePrices: () => void
+  projects: ImageToolProjectGroup[]
+  providerUnitPriceDraft: string
+  snapshot: ImageToolTaskUsageSnapshot
+  status?: string
+  templates: ImageProviderTemplate[]
+  text: (typeof copy)[Language]
+}): React.JSX.Element {
+  const stats = snapshot.stats
+  const projectNameById = new Map(projects.map((project) => [project.id, project.name]))
+  const currentTemplate = getImageProviderTemplate(currentProviderTemplateId, templates)
+  const currentTemplateName = getProviderTemplateLabel(currentTemplate, text).name
+  const updateFilter = (patch: Partial<UsageFilters>) => onFiltersChange({ ...filters, ...patch })
+
+  return (
+    <div className="settings-drawer-backdrop usage-panel-backdrop" role="presentation">
+      <aside className="settings-drawer usage-panel" aria-label={text.usageTitle} aria-modal="true" role="dialog">
+        <div className="settings-drawer-header">
+          <div>
+            <p className="eyebrow">{text.tasksUsage}</p>
+            <h2>{text.usageTitle}</h2>
+          </div>
+          <button className="icon-button" onClick={onClose} type="button">
+            {text.close}
+          </button>
+        </div>
+        <div className="settings-drawer-body usage-panel-body">
+          <section className="usage-stats-grid" aria-label={text.usageTitle}>
+            <UsageStatCard label={text.usageStatsTotalTasks} value={stats.totalTasks} />
+            <UsageStatCard label={text.usageStatsSucceededTasks} value={stats.succeededTasks} />
+            <UsageStatCard label={text.usageStatsFailedTasks} value={stats.failedTasks} />
+            <UsageStatCard label={text.usageStatsRunningTasks} value={stats.runningTasks} />
+            <UsageStatCard label={text.usageStatsSuccessfulImages} value={stats.successfulImages} />
+            <UsageStatCard label={text.usageStatsTotalCost} value={formatCurrencyCny(stats.totalCost)} />
+          </section>
+
+          <section className="settings-section usage-price-section" aria-label={text.usagePriceSettings}>
+            <div className="request-preview-header">
+              <strong>{text.usagePriceSettings}</strong>
+            </div>
+            <label className="compact-field" htmlFor="usage-default-price">
+              <span>{text.usageDefaultUnitPrice}</span>
+              <input
+                id="usage-default-price"
+                inputMode="decimal"
+                min="0"
+                onChange={(event) => onDefaultUnitPriceDraftChange(event.currentTarget.value)}
+                step="0.0001"
+                type="number"
+                value={defaultUnitPriceDraft}
+              />
+            </label>
+            <label className="compact-field" htmlFor="usage-provider-price">
+              <span>
+                {text.usageCurrentProviderUnitPrice} · {currentTemplateName}
+              </span>
+              <input
+                id="usage-provider-price"
+                inputMode="decimal"
+                min="0"
+                onChange={(event) => onProviderUnitPriceDraftChange(event.currentTarget.value)}
+                step="0.0001"
+                type="number"
+                value={providerUnitPriceDraft}
+              />
+            </label>
+            <p className="usage-price-note">{text.usageUnitLabel}</p>
+            <button className="generate-button" onClick={onSavePrices} type="button">
+              {text.usageSavePrices}
+            </button>
+          </section>
+
+          <section className="settings-section usage-filter-section" aria-label={text.usageFilters}>
+            <div className="request-preview-header">
+              <strong>{text.usageFilters}</strong>
+            </div>
+            <label className="compact-field">
+              <span>{text.usageTableApi}</span>
+              <select
+                onChange={(event) => updateFilter({ providerTemplateId: event.currentTarget.value })}
+                value={filters.providerTemplateId}
+              >
+                <option value="all">{text.usageAllApis}</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {getProviderTemplateLabel(template, text).name}
+                  </option>
+                ))}
+                <option value="deleted">{text.usageDeletedApis}</option>
+              </select>
+            </label>
+            <label className="compact-field">
+              <span>{text.usageTableStatus}</span>
+              <select
+                onChange={(event) => updateFilter({ status: event.currentTarget.value as UsageStatusFilter })}
+                value={filters.status}
+              >
+                <option value="all">{text.usageAllStatuses}</option>
+                <option value="queued">{text.usageStatusQueued}</option>
+                <option value="running">{text.usageStatusRunning}</option>
+                <option value="succeeded">{text.usageStatusSucceeded}</option>
+                <option value="failed">{text.usageStatusFailed}</option>
+                <option value="canceled">{text.usageStatusCanceled}</option>
+              </select>
+            </label>
+            <label className="compact-field">
+              <span>{text.usageTableType}</span>
+              <select
+                onChange={(event) => updateFilter({ taskType: event.currentTarget.value as UsageTypeFilter })}
+                value={filters.taskType}
+              >
+                <option value="all">{text.usageAllTypes}</option>
+                <option value="text_to_image">{text.usageTypeTextToImage}</option>
+                <option value="image_to_image">{text.usageTypeImageToImage}</option>
+                <option value="image_edit">{text.usageTypeImageEdit}</option>
+              </select>
+            </label>
+            <label className="compact-field">
+              <span>{text.usageTableTime}</span>
+              <select
+                onChange={(event) => updateFilter({ timeRange: event.currentTarget.value as UsageTimeRangeFilter })}
+                value={filters.timeRange}
+              >
+                <option value="all">{text.usageAllTime}</option>
+                <option value="today">{text.usageToday}</option>
+                <option value="7d">{text.usageLast7Days}</option>
+                <option value="30d">{text.usageLast30Days}</option>
+              </select>
+            </label>
+          </section>
+
+          <div className="usage-table-wrap">
+            {snapshot.records.length === 0 ? (
+              <p className="usage-empty">{text.usageEmpty}</p>
+            ) : (
+              <table className="usage-table">
+                <thead>
+                  <tr>
+                    <th>{text.usageTableTime}</th>
+                    <th>{text.usageTableApi}</th>
+                    <th>{text.usageTableType}</th>
+                    <th>{text.usageTableStatus}</th>
+                    <th>{text.usageTableModel}</th>
+                    <th>{text.usageTableSize}</th>
+                    <th>{text.usageTableImages}</th>
+                    <th>{text.usageTableUnitPrice}</th>
+                    <th>{text.usageTableCost}</th>
+                    <th>{text.usageTableConversation}</th>
+                    <th>{text.usageTableError}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {snapshot.records.map((record) => {
+                    const imageCount =
+                      record.status === 'succeeded'
+                        ? `${record.successfulImageCount}/${record.requestedImageCount}`
+                        : String(record.requestedImageCount)
+                    const cost =
+                      record.status === 'succeeded'
+                        ? formatCurrencyCny(record.estimatedCost)
+                        : record.status === 'failed' || record.status === 'canceled'
+                          ? formatCurrencyCny(0)
+                          : `${formatCurrencyCny(record.estimatedCost)} ${text.usageEstimatedCostHint}`
+                    const conversationLabel = [
+                      record.conversationId,
+                      record.projectId ? (projectNameById.get(record.projectId) ?? record.projectId) : undefined
+                    ]
+                      .filter(Boolean)
+                      .join(' / ')
+
+                    return (
+                      <tr key={record.id}>
+                        <td>{formatFullDateTime(record.createdAt, language)}</td>
+                        <td title={record.providerTemplateName}>{record.providerTemplateName}</td>
+                        <td>{getUsageTaskTypeLabel(record.taskType, text)}</td>
+                        <td>
+                          <span className={`usage-status-pill usage-status-${record.status}`}>
+                            {getUsageStatusLabel(record.status, text)}
+                          </span>
+                        </td>
+                        <td title={record.model}>{record.model}</td>
+                        <td>{record.size ?? '-'}</td>
+                        <td>{imageCount}</td>
+                        <td>{formatUnitPrice(record.unitPrice)}</td>
+                        <td>{cost}</td>
+                        <td title={conversationLabel}>{conversationLabel || '-'}</td>
+                        <td title={record.errorMessage ?? record.promptPreview ?? ''}>
+                          {record.errorMessage ?? record.promptPreview ?? '-'}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+          {status && <p className="settings-status">{status}</p>}
+        </div>
+        <div className="settings-drawer-actions">
+          <button className="secondary-button" onClick={onClear} type="button">
+            {text.usageClear}
+          </button>
+          <button className="secondary-button" onClick={onExportCsv} type="button">
+            {text.usageExportCsv}
+          </button>
+          <button className="generate-button" onClick={onClose} type="button">
+            {text.close}
+          </button>
+        </div>
+      </aside>
+    </div>
+  )
+}
+
+function UsageStatCard({ label, value }: { label: string; value: number | string }): React.JSX.Element {
+  return (
+    <div className="usage-stat-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   )
 }

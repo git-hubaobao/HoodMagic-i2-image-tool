@@ -17,8 +17,11 @@ import type {
   ImageToolPromptTemplateInput,
   ImageToolSaveImageResultAsPromptTemplateInput,
   ImageToolSessionState,
+  ImageToolTaskRecordFilters,
+  ImageToolTaskUsageSnapshot,
   ImageToolTestConnectionRequest,
-  ImageToolTestConnectionResult
+  ImageToolTestConnectionResult,
+  ImageToolUsagePriceSettings
 } from '../shared/image2'
 
 console.info('[image-tool preload] loaded')
@@ -41,6 +44,21 @@ contextBridge.exposeInMainWorld('imageTool', {
   },
   listImageTasks: (): Promise<ImageToolImageTask[]> => {
     return ipcRenderer.invoke('image-tool:list-image-tasks') as Promise<ImageToolImageTask[]>
+  },
+  listTaskUsage: (filters?: ImageToolTaskRecordFilters): Promise<ImageToolTaskUsageSnapshot> => {
+    return ipcRenderer.invoke('image-tool:list-task-usage', filters) as Promise<ImageToolTaskUsageSnapshot>
+  },
+  saveUsagePriceSettings: (settings: ImageToolUsagePriceSettings): Promise<ImageToolPersistedSettings> => {
+    return ipcRenderer.invoke('image-tool:save-usage-price-settings', settings) as Promise<ImageToolPersistedSettings>
+  },
+  clearTaskUsage: (): Promise<ImageToolTaskUsageSnapshot> => {
+    return ipcRenderer.invoke('image-tool:clear-task-usage') as Promise<ImageToolTaskUsageSnapshot>
+  },
+  exportTaskUsageCsv: (filters?: ImageToolTaskRecordFilters): Promise<ImageToolPromptTemplateExportResult> => {
+    return ipcRenderer.invoke(
+      'image-tool:export-task-usage-csv',
+      filters
+    ) as Promise<ImageToolPromptTemplateExportResult>
   },
   getSessionState: (): Promise<ImageToolSessionState> => {
     return ipcRenderer.invoke('image-tool:get-session-state') as Promise<ImageToolSessionState>

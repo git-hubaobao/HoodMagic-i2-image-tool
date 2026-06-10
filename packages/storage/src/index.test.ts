@@ -13,12 +13,16 @@ import {
   createImagePromptPackExport,
   createImagePromptTemplateExport,
   createProjectGroup,
+  createTaskRecord,
   DEFAULT_CONVERSATION_ID,
   DEFAULT_PROJECT_ID,
   DEFAULT_PROMPT_TEMPLATE_CATEGORY_ID,
+  DEFAULT_UNIT_PRICE,
   ensureUniqueFilePath,
+  filterTaskRecords,
   getImageFileExtension,
   getImageProviderTemplates,
+  getProviderUnitPrice,
   type ImageHistoryItem,
   moveConversationToProject,
   moveConversationToTrash,
@@ -35,7 +39,9 @@ import {
   sanitizeFileNamePart,
   sanitizeImageToolData,
   setImageProviderCredential,
+  summarizeTaskUsage,
   updateImageHistoryItem,
+  updateTaskRecord,
   upsertCustomProviderTemplate,
   upsertPromptTemplate,
   upsertPromptTemplateCategory
@@ -70,6 +76,9 @@ describe('storage image-tool data helpers', () => {
     expect(settings.sendResponseFormat).toBe(false)
     expect(settings.providerCredentials).toEqual({})
     expect(settings.customProviderTemplates).toEqual([])
+    expect(settings.defaultUnitPrice).toBe(DEFAULT_UNIT_PRICE)
+    expect(settings.currency).toBe('CNY')
+    expect(settings.providerUnitPrices).toEqual({})
   })
 
   it('exposes only the compatible built-in provider template', () => {
@@ -1027,6 +1036,261 @@ describe('storage image-tool data helpers', () => {
 
     expect(nextData).toBe(data)
     expect(nextData.settings.providerTemplateId).toBe(COMPATIBLE_PROVIDER_TEMPLATE_ID)
+  })
+
+  it('saves different provider unit prices outside credentials', () => {
+    const data = sanitizeImageToolData({
+      settings: {
+        defaultUnitPrice: 0.08,
+        providerUnitPrices: {
+          [COMPATIBLE_PROVIDER_TEMPLATE_ID]: 0.06,
+          'custom-team-gateway': '0.12345',
+          invalid: -1
+        },
+        providerCredentials: {
+          [COMPATIBLE_PROVIDER_TEMPLATE_ID]: {
+            apiKey: 'secret-key'
+          }
+        }
+      }
+    })
+
+    expect(data.settings.defaultUnitPrice).toBe(0.08)
+    expect(data.settings.providerUnitPrices[COMPATIBLE_PROVIDER_TEMPLATE_ID]).toBe(0.06)
+    expect(data.settings.providerUnitPrices['custom-team-gateway']).toBe(0.1235)
+    expect(data.settings.providerUnitPrices.invalid).toBeUndefined()
+    expect(data.settings.providerCredentials[COMPATIBLE_PROVIDER_TEMPLATE_ID]?.apiKey).toBe('secret-key')
+    expect(getProviderUnitPrice(data.settings, 'custom-team-gateway')).toBe(0.1235)
+    expect(getProviderUnitPrice(data.settings, 'missing-template')).toBe(0.08)
+  })
+
+  it('creates queued task records and updates running and succeeded cost', () => {
+    const data = sanitizeImageToolData({
+      settings: {
+        providerUnitPrices: {
+          'custom-team-gateway': 0.12
+        }
+      }
+    })
+    const queuedData = createTaskRecord(data, {
+      taskId: 'task-usage-1',
+      providerTemplateId: 'custom-team-gateway',
+      providerTemplateName: 'Team Gateway',
+      model: 'gpt-image-2',
+      taskType: 'text_to_image',
+      prompt: 'Create a neon storefront',
+      requestedImageCount: 2,
+      size: '1024x1024',
+      quality: 'high',
+      outputFormat: 'png',
+      createdAt: '2026-01-01T00:00:00.000Z'
+    })
+    const runningData = updateTaskRecord(queuedData, 'task-usage-1', {
+      status: 'running',
+      startedAt: '2026-01-01T00:00:02.000Z',
+      updatedAt: '2026-01-01T00:00:02.000Z'
+    })
+    const succeededData = updateTaskRecord(runningData, 'task-usage-1', {
+      status: 'succeeded',
+      successfulImageCount: 2,
+      completedAt: '2026-01-01T00:00:05.000Z',
+      updatedAt: '2026-01-01T00:00:05.000Z'
+    })
+
+    expect(queuedData.taskRecords[0]).toMatchObject({
+      taskId: 'task-usage-1',
+      providerTemplateId: 'custom-team-gateway',
+      providerTemplateName: 'Team Gateway',
+      status: 'queued',
+      unitPrice: 0.12,
+      estimatedCost: 0.24
+    })
+    expect(runningData.taskRecords[0]).toMatchObject({
+      status: 'running',
+      startedAt: '2026-01-01T00:00:02.000Z'
+    })
+    expect(succeededData.taskRecords[0]).toMatchObject({
+      status: 'succeeded',
+      successfulImageCount: 2,
+      estimatedCost: 0.24,
+      completedAt: '2026-01-01T00:00:05.000Z'
+    })
+  })
+
+  it('sets failed task cost to zero', () => {
+    const queuedData = createTaskRecord(createDefaultImageToolData(), {
+      taskId: 'task-failed',
+      providerTemplateId: COMPATIBLE_PROVIDER_TEMPLATE_ID,
+      providerTemplateName: 'Compatible API',
+      model: 'gpt-image-2',
+      taskType: 'image_to_image',
+      prompt: 'Use reference image',
+      requestedImageCount: 1
+    })
+    const failedData = updateTaskRecord(queuedData, 'task-failed', {
+      status: 'failed',
+      errorCode: 'upstream_error',
+      errorMessage: 'Bearer secret-token failed with data:image/png;base64,secret-image-data at C:\\Users\\me\\a.png'
+    })
+
+    expect(failedData.taskRecords[0]).toMatchObject({
+      status: 'failed',
+      successfulImageCount: 0,
+      estimatedCost: 0,
+      errorCode: 'upstream_error'
+    })
+    expect(JSON.stringify(failedData.taskRecords[0])).not.toContain('secret-token')
+    expect(JSON.stringify(failedData.taskRecords[0])).not.toContain('secret-image-data')
+    expect(JSON.stringify(failedData.taskRecords[0])).not.toContain('C:\\Users')
+  })
+
+  it('filters task usage by provider status type and time range', () => {
+    const data = [
+      {
+        taskId: 'task-a',
+        providerTemplateId: 'provider-a',
+        providerTemplateName: 'Provider A',
+        model: 'gpt-image-2',
+        taskType: 'text_to_image' as const,
+        status: 'succeeded' as const,
+        successfulImageCount: 2,
+        createdAt: '2026-01-01T00:00:00.000Z'
+      },
+      {
+        taskId: 'task-b',
+        providerTemplateId: 'provider-b',
+        providerTemplateName: 'Provider B',
+        model: 'gpt-image-2',
+        taskType: 'image_edit' as const,
+        status: 'failed' as const,
+        successfulImageCount: 0,
+        createdAt: '2026-01-02T00:00:00.000Z'
+      },
+      {
+        taskId: 'task-c',
+        providerTemplateId: 'provider-a',
+        providerTemplateName: 'Provider A',
+        model: 'gpt-image-2',
+        taskType: 'image_to_image' as const,
+        status: 'running' as const,
+        successfulImageCount: 0,
+        createdAt: '2026-01-03T00:00:00.000Z'
+      }
+    ].reduce((currentData, input) => {
+      const nextData = createTaskRecord(currentData, input)
+      return updateTaskRecord(nextData, input.taskId, {
+        status: input.status,
+        successfulImageCount: input.successfulImageCount,
+        completedAt: input.status === 'running' ? undefined : input.createdAt,
+        updatedAt: input.createdAt
+      })
+    }, createDefaultImageToolData())
+
+    const providerARecords = filterTaskRecords(data.taskRecords, { providerTemplateId: 'provider-a' })
+    const failedRecords = filterTaskRecords(data.taskRecords, { status: 'failed' })
+    const editRecords = filterTaskRecords(data.taskRecords, { taskType: 'image_edit' })
+    const rangedRecords = filterTaskRecords(data.taskRecords, {
+      createdAtFrom: '2026-01-02T00:00:00.000Z',
+      createdAtTo: '2026-01-03T23:59:59.999Z'
+    })
+
+    expect(providerARecords.map((record) => record.taskId).sort()).toEqual(['task-a', 'task-c'])
+    expect(summarizeTaskUsage(providerARecords)).toMatchObject({
+      totalTasks: 2,
+      succeededTasks: 1,
+      failedTasks: 0,
+      runningTasks: 1,
+      successfulImages: 2,
+      totalCost: 0.12
+    })
+    expect(failedRecords.map((record) => record.taskId)).toEqual(['task-b'])
+    expect(editRecords.map((record) => record.taskId)).toEqual(['task-b'])
+    expect(rangedRecords.map((record) => record.taskId).sort()).toEqual(['task-b', 'task-c'])
+  })
+
+  it('keeps historical unit price and provider name snapshot', () => {
+    const data = sanitizeImageToolData({
+      settings: {
+        defaultUnitPrice: 0.06,
+        providerUnitPrices: {
+          'custom-snapshot': 0.2
+        }
+      }
+    })
+    const queuedData = createTaskRecord(data, {
+      taskId: 'task-snapshot',
+      providerTemplateId: 'custom-snapshot',
+      providerTemplateName: 'Old Gateway',
+      model: 'gpt-image-2',
+      taskType: 'text_to_image',
+      prompt: 'A saved snapshot',
+      requestedImageCount: 1
+    })
+    const repricedData = sanitizeImageToolData({
+      ...queuedData,
+      settings: {
+        ...queuedData.settings,
+        providerUnitPrices: {
+          'custom-snapshot': 0.5
+        }
+      }
+    })
+    const succeededData = updateTaskRecord(repricedData, 'task-snapshot', {
+      status: 'succeeded',
+      successfulImageCount: 1
+    })
+
+    expect(succeededData.taskRecords[0]).toMatchObject({
+      providerTemplateName: 'Old Gateway',
+      unitPrice: 0.2,
+      estimatedCost: 0.2
+    })
+  })
+
+  it('keeps deleted provider task records queryable', () => {
+    const data = createTaskRecord(createDefaultImageToolData(), {
+      taskId: 'task-deleted-provider',
+      providerTemplateId: 'custom-deleted',
+      providerTemplateName: 'Deleted Gateway',
+      model: 'gpt-image-2',
+      taskType: 'text_to_image',
+      prompt: 'A deleted provider task'
+    })
+    const deletedProviderRecords = filterTaskRecords(data.taskRecords, {
+      deletedProviderTemplatesOnly: true,
+      existingProviderTemplateIds: [COMPATIBLE_PROVIDER_TEMPLATE_ID]
+    })
+
+    expect(deletedProviderRecords.map((record) => record.taskId)).toEqual(['task-deleted-provider'])
+  })
+
+  it('does not store sensitive task record payloads or duplicate retry records', () => {
+    const data = createTaskRecord(createDefaultImageToolData(), {
+      taskId: 'task-sensitive',
+      providerTemplateId: COMPATIBLE_PROVIDER_TEMPLATE_ID,
+      providerTemplateName: 'Compatible API',
+      model: 'gpt-image-2',
+      taskType: 'image_edit',
+      prompt:
+        'Edit this data:image/png;base64,secret-reference-image-data with mask data:image/png;base64,secret-mask-data and key secret-api-key',
+      requestedImageCount: 1
+    })
+    const duplicateData = createTaskRecord(data, {
+      taskId: 'task-sensitive',
+      providerTemplateId: COMPATIBLE_PROVIDER_TEMPLATE_ID,
+      providerTemplateName: 'Compatible API Renamed',
+      model: 'gpt-image-2',
+      taskType: 'image_edit',
+      prompt: 'Retry should not duplicate',
+      requestedImageCount: 1
+    })
+    const serializedRecord = JSON.stringify(duplicateData.taskRecords[0])
+
+    expect(duplicateData.taskRecords).toHaveLength(1)
+    expect(serializedRecord).not.toContain('secret-reference-image-data')
+    expect(serializedRecord).not.toContain('secret-mask-data')
+    expect(serializedRecord).not.toContain('data:image/png;base64')
+    expect(serializedRecord).not.toContain('apiKey')
   })
 
   it('sanitizes file name parts', () => {

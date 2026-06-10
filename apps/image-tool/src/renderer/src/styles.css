@@ -53,7 +53,7 @@ button:disabled {
 .conversation-sidebar {
   flex: 0 0 clamp(240px, 22vw, 280px);
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   gap: 10px;
   width: clamp(240px, 22vw, 280px);
   min-width: 220px;
@@ -1516,6 +1516,153 @@ h1 {
   padding: 0 12px;
 }
 
+.usage-panel {
+  width: min(980px, calc(100% - 28px));
+}
+
+.usage-panel-body {
+  gap: 14px;
+}
+
+.usage-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.usage-stat-card {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid #e1e7f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.usage-stat-card span {
+  overflow: hidden;
+  color: #65758c;
+  font-size: 11px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-stat-card strong {
+  overflow: hidden;
+  color: #172033;
+  font-size: 20px;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-price-section,
+.usage-filter-section {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.usage-price-section .request-preview-header,
+.usage-filter-section .request-preview-header {
+  grid-column: 1 / -1;
+}
+
+.usage-price-note {
+  align-self: end;
+  margin: 0;
+  color: #65758c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.usage-table-wrap {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid #e1e7f0;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.usage-table {
+  width: 100%;
+  min-width: 1080px;
+  border-collapse: collapse;
+  color: #172033;
+  font-size: 12px;
+}
+
+.usage-table th,
+.usage-table td {
+  max-width: 180px;
+  padding: 10px 9px;
+  border-bottom: 1px solid #edf2f7;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.usage-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.usage-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid #d9e1ed;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.usage-status-succeeded {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.usage-status-failed {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #991b1b;
+}
+
+.usage-status-running,
+.usage-status-queued {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.usage-status-canceled {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  color: #64748b;
+}
+
+.usage-empty {
+  margin: 0;
+  padding: 28px 16px;
+  color: #64748b;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .settings-status {
   grid-column: 1 / -1;
   margin: 0;
@@ -2730,7 +2877,7 @@ select option {
 
 .conversation-sidebar {
   flex: 0 0 clamp(300px, 24vw, 330px);
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   gap: 18px;
   width: clamp(300px, 24vw, 330px);
   min-width: 280px;
@@ -6284,6 +6431,8 @@ html[data-theme='light'] select option {
 .chat-shell[data-theme] .advanced-settings,
 .chat-shell[data-theme] .connection-result,
 .chat-shell[data-theme] .request-preview,
+.chat-shell[data-theme] .usage-stat-card,
+.chat-shell[data-theme] .usage-table-wrap,
 .chat-shell[data-theme] .bridge-diagnostics,
 .chat-shell[data-theme] .image-debug,
 .chat-shell[data-theme] .message-error,
@@ -6313,8 +6462,26 @@ html[data-theme='light'] select option {
 .chat-shell[data-theme] .message-text,
 .chat-shell[data-theme] .request-preview dd,
 .chat-shell[data-theme] .connection-result dd,
+.chat-shell[data-theme] .usage-stat-card strong,
+.chat-shell[data-theme] .usage-table,
 .chat-shell[data-theme] .image-debug dd {
   color: var(--text);
+}
+
+.chat-shell[data-theme] .usage-stat-card span,
+.chat-shell[data-theme] .usage-price-note,
+.chat-shell[data-theme] .usage-empty,
+.chat-shell[data-theme] .usage-table th {
+  color: var(--muted);
+}
+
+.chat-shell[data-theme] .usage-table th {
+  background: var(--modal-header-bg);
+}
+
+.chat-shell[data-theme] .usage-table th,
+.chat-shell[data-theme] .usage-table td {
+  border-color: var(--line-quiet);
 }
 
 .chat-shell[data-theme] .image-preview-frame,
@@ -6381,6 +6548,26 @@ html[data-theme='light'] select option {
 .chat-shell[data-theme] .danger-subtle-button {
   border-color: color-mix(in srgb, var(--danger) 22%, transparent);
   background: var(--danger-soft);
+}
+
+.chat-shell[data-theme] .usage-status-succeeded {
+  border-color: color-mix(in srgb, var(--primary) 30%, transparent);
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+}
+
+.chat-shell[data-theme] .usage-status-failed {
+  border-color: color-mix(in srgb, var(--danger) 24%, transparent);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.chat-shell[data-theme] .usage-status-running,
+.chat-shell[data-theme] .usage-status-queued,
+.chat-shell[data-theme] .usage-status-canceled {
+  border-color: var(--border);
+  background: var(--control-bg);
+  color: var(--muted);
 }
 
 .chat-shell[data-theme] .danger-subtle-button,
@@ -6518,4 +6705,19 @@ html[data-theme='light'] select option {
   box-shadow:
     var(--soft-shadow),
     0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+@media (max-width: 820px) {
+  .usage-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-price-section,
+  .usage-filter-section {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-panel {
+    width: min(100%, calc(100% - 16px));
+  }
 }

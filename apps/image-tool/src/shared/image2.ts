@@ -8,7 +8,11 @@ import type {
   PromptTemplateCategory,
   PromptTemplateRecommendedParams,
   PromptTemplateType,
-  PromptTemplateVariable
+  PromptTemplateVariable,
+  TaskRecord,
+  TaskRecordFilters,
+  TaskUsageStats,
+  UsageCurrency
 } from '@hoodmagic/storage'
 import type {
   ImageEditTaskRequest,
@@ -106,6 +110,9 @@ export type ImageToolGenerateImage2Request = ImageGenerationTaskRequest & {
   sendOutputFormat: boolean
   sendResponseFormat: boolean
   responseFormat?: ImageToolImage2ResponseFormat
+  providerTemplateId?: string
+  providerTemplateName?: string
+  projectId?: string | null
 }
 
 export type ImageToolReferenceImage = {
@@ -126,6 +133,9 @@ export type ImageToolEditImage2Request = Omit<ImageEditTaskRequest, 'images'> & 
   sendOutputFormat: boolean
   sendResponseFormat: boolean
   responseFormat?: ImageToolImage2ResponseFormat
+  providerTemplateId?: string
+  providerTemplateName?: string
+  projectId?: string | null
   images: ImageToolReferenceImage[]
   mask?: ImageToolReferenceImage
 } & ImageToolEditSubmitMetadata
@@ -232,6 +242,25 @@ export type ImageToolImageTaskEvent = Omit<TaskEvent, 'task'> & {
 export type ImageToolImageTaskEventCallback = (event: ImageToolImageTaskEvent) => void
 
 export type ImageToolPersistedSettings = ImageToolSettings
+
+export type ImageToolTaskRecord = TaskRecord
+
+export type ImageToolTaskRecordFilters = TaskRecordFilters
+
+export type ImageToolTaskUsageStats = TaskUsageStats
+
+export type ImageToolUsageCurrency = UsageCurrency
+
+export type ImageToolTaskUsageSnapshot = {
+  records: ImageToolTaskRecord[]
+  stats: ImageToolTaskUsageStats
+}
+
+export type ImageToolUsagePriceSettings = {
+  defaultUnitPrice: number
+  currency: ImageToolUsageCurrency
+  providerUnitPrices: Record<string, number>
+}
 
 export type ImageToolProjectGroup = ProjectGroup
 

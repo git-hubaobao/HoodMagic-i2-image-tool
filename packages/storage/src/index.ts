@@ -20,6 +20,9 @@ export type ImageToolSettings = {
   saveApiKey: boolean
   providerCredentials: ImageProviderCredentials
   customProviderTemplates: ImageProviderTemplate[]
+  defaultUnitPrice: number
+  currency: UsageCurrency
+  providerUnitPrices: ProviderUnitPrices
 }
 
 export type ImageProviderCredential = {
@@ -40,6 +43,89 @@ export type ImageProviderTemplate = {
   responseFormat?: 'url' | 'b64_json'
   sendOutputFormat: boolean
   outputFormat?: 'png' | 'jpeg' | 'webp'
+}
+
+export type UsageCurrency = 'CNY'
+
+export type ProviderUnitPrices = Record<string, number>
+
+export type TaskRecordType = 'text_to_image' | 'image_to_image' | 'image_edit'
+
+export type TaskRecordStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled'
+
+export type TaskRecord = {
+  id: string
+  taskId: string
+  providerTemplateId: string
+  providerTemplateName: string
+  model: string
+  taskType: TaskRecordType
+  status: TaskRecordStatus
+  conversationId?: string
+  projectId?: string | null
+  promptPreview?: string
+  requestedImageCount: number
+  successfulImageCount: number
+  unitPrice: number
+  currency: UsageCurrency
+  estimatedCost: number
+  size?: string
+  quality?: string
+  outputFormat?: string
+  errorCode?: string
+  errorMessage?: string
+  createdAt: string
+  startedAt?: string
+  completedAt?: string
+  updatedAt: string
+}
+
+export type CreateTaskRecordInput = {
+  id?: string
+  taskId: string
+  providerTemplateId: string
+  providerTemplateName: string
+  model: string
+  taskType: TaskRecordType
+  conversationId?: string
+  projectId?: string | null
+  prompt?: string
+  requestedImageCount?: number
+  size?: string
+  quality?: string
+  outputFormat?: string
+  createdAt?: string
+}
+
+export type UpdateTaskRecordPatch = {
+  taskId?: string
+  status?: TaskRecordStatus
+  startedAt?: string
+  completedAt?: string
+  successfulImageCount?: number
+  errorCode?: string
+  errorMessage?: string
+  updatedAt?: string
+}
+
+export type TaskRecordFilters = {
+  providerTemplateId?: string
+  deletedProviderTemplatesOnly?: boolean
+  existingProviderTemplateIds?: readonly string[]
+  status?: TaskRecordStatus
+  taskType?: TaskRecordType
+  createdAtFrom?: string
+  createdAtTo?: string
+}
+
+export type TaskUsageStats = {
+  totalTasks: number
+  succeededTasks: number
+  failedTasks: number
+  runningTasks: number
+  successfulImages: number
+  totalCost: number
+  currency: UsageCurrency
 }
 
 export type ProjectGroup = {
@@ -192,6 +278,7 @@ export type ImageToolData = {
   activeConversationId?: string
   trashRetentionDays?: number
   history: ImageHistoryItem[]
+  taskRecords: TaskRecord[]
   promptTemplateCategories: PromptTemplateCategory[]
   promptTemplates: PromptTemplate[]
 }
@@ -199,6 +286,8 @@ export type ImageToolData = {
 export const DEFAULT_PROJECT_ID = 'default'
 export const DEFAULT_CONVERSATION_ID = 'default'
 export const DEFAULT_PROMPT_TEMPLATE_CATEGORY_ID = 'uncategorized'
+export const DEFAULT_USAGE_CURRENCY: UsageCurrency = 'CNY'
+export const DEFAULT_UNIT_PRICE = 0.06
 export const DEFAULT_PROJECT_NAME = '默认项目'
 export const DEFAULT_CONVERSATION_TITLE = '默认会话'
 export const NEW_CONVERSATION_TITLE = '新聊天'
@@ -231,6 +320,8 @@ const responseFormatValues = new Set<NonNullable<ImageToolSettings['responseForm
 const sizeModeValues = new Set<ImageToolSettings['sizeMode']>(['auto', 'fixed'])
 const appearanceThemeValues = new Set<ImageToolAppearanceTheme>(['dark', 'light'])
 const promptTemplateTypeValues = new Set<PromptTemplateType>(['text_to_image', 'image_to_image'])
+const taskRecordTypeValues = new Set<TaskRecordType>(['text_to_image', 'image_to_image', 'image_edit'])
+const taskRecordStatusValues = new Set<TaskRecordStatus>(['queued', 'running', 'succeeded', 'failed', 'canceled'])
 const imageMimeTypeToExtension = new Map([
   ['image/jpeg', 'jpeg'],
   ['image/jpg', 'jpeg'],
@@ -253,6 +344,16 @@ const endpointPathOrDefault = (value: unknown, fallback: string): string => {
 
 const numberOrDefault = (value: unknown, fallback: number): number => {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+const nonNegativeNumberOrDefault = (value: unknown, fallback: number): number => {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : Number.NaN
+
+  if (!Number.isFinite(number) || number < 0) {
+    return fallback
+  }
+
+  return Math.round(number * 10000) / 10000
 }
 
 const positiveIntegerOrDefault = (value: unknown, fallback: number): number => {
@@ -384,7 +485,10 @@ export const createDefaultImageToolSettings = (): ImageToolSettings => ({
   sizePreset: '3840x2160',
   saveApiKey: false,
   providerCredentials: {},
-  customProviderTemplates: []
+  customProviderTemplates: [],
+  defaultUnitPrice: DEFAULT_UNIT_PRICE,
+  currency: DEFAULT_USAGE_CURRENCY,
+  providerUnitPrices: {}
 })
 
 export const getImageProviderTemplates = (
@@ -439,6 +543,7 @@ export const createDefaultImageToolData = (): ImageToolData => ({
   conversations: [],
   trashRetentionDays: 30,
   history: [],
+  taskRecords: [],
   promptTemplateCategories: [createDefaultPromptTemplateCategory()],
   promptTemplates: []
 })
@@ -668,6 +773,38 @@ const sanitizeProviderCredentials = (credentials: unknown): ImageProviderCredent
   }, {})
 }
 
+const sanitizeProviderUnitPrices = (prices: unknown): ProviderUnitPrices => {
+  if (!isRecord(prices)) {
+    return {}
+  }
+
+  return Object.entries(prices).reduce<ProviderUnitPrices>((sanitizedPrices, [templateId, value]) => {
+    const sanitizedTemplateId = sanitizeCredentialTemplateId(templateId)
+
+    if (!sanitizedTemplateId) {
+      return sanitizedPrices
+    }
+
+    const unitPrice = nonNegativeNumberOrDefault(value, Number.NaN)
+
+    if (!Number.isFinite(unitPrice)) {
+      return sanitizedPrices
+    }
+
+    return {
+      ...sanitizedPrices,
+      [sanitizedTemplateId]: unitPrice
+    }
+  }, {})
+}
+
+export const getProviderUnitPrice = (
+  settings: Pick<ImageToolSettings, 'defaultUnitPrice' | 'providerUnitPrices'>,
+  providerTemplateId: string
+): number => {
+  return settings.providerUnitPrices[providerTemplateId] ?? settings.defaultUnitPrice
+}
+
 const upsertProviderTemplate = (
   templates: ImageProviderTemplate[],
   template: ImageProviderTemplate
@@ -743,6 +880,7 @@ const sanitizeSettings = (settings: unknown): ImageToolSettings => {
   const responseFormat = stringOrDefault(settings.responseFormat, defaults.responseFormat ?? 'b64_json')
   const sizeMode = stringOrDefault(settings.sizeMode, defaults.sizeMode)
   const appearanceTheme = stringOrDefault(settings.appearanceTheme, defaults.appearanceTheme)
+  const currency = stringOrDefault(settings.currency, defaults.currency)
   const rawProviderTemplateId = stringOrDefault(settings.providerTemplateId, defaults.providerTemplateId).trim()
   let providerTemplateId = normalizeCompatibleProviderTemplateId(rawProviderTemplateId || defaults.providerTemplateId)
   let providerCredentials = sanitizeProviderCredentials(settings.providerCredentials)
@@ -868,7 +1006,10 @@ const sanitizeSettings = (settings: unknown): ImageToolSettings => {
     sizePreset: stringOrDefault(settings.sizePreset, defaults.sizePreset),
     saveApiKey: typeof settings.saveApiKey === 'boolean' ? settings.saveApiKey : defaults.saveApiKey,
     providerCredentials,
-    customProviderTemplates: migratedCustomProviderTemplates
+    customProviderTemplates: migratedCustomProviderTemplates,
+    defaultUnitPrice: nonNegativeNumberOrDefault(settings.defaultUnitPrice, defaults.defaultUnitPrice),
+    currency: currency === DEFAULT_USAGE_CURRENCY ? DEFAULT_USAGE_CURRENCY : defaults.currency,
+    providerUnitPrices: sanitizeProviderUnitPrices(settings.providerUnitPrices ?? settings.apiTemplateUnitPrices)
   }
 }
 
@@ -885,6 +1026,115 @@ const normalizeTitle = (value: unknown, fallback: string): string => {
 const createConversationTitleFromPrompt = (prompt: string): string => {
   const title = prompt.trim().replace(/\s+/g, ' ').slice(0, 30)
   return title || NEW_CONVERSATION_TITLE
+}
+
+const sanitizePromptPreview = (value: unknown): string | undefined => {
+  const preview = stringOrDefault(value, '')
+    .replace(/data:image\/[a-zA-Z+.-]+;base64,[a-zA-Z0-9+/=]+/g, '[image]')
+    .replace(/[A-Za-z]:\\[^\s"'<>|]+/g, '[path]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 160)
+
+  return preview || undefined
+}
+
+const sanitizeErrorSummary = (value: unknown): string | undefined => {
+  const summary = stringOrDefault(value, '')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [redacted]')
+    .replace(/sk-[A-Za-z0-9_-]+/g, '[redacted]')
+    .replace(/data:image\/[a-zA-Z+.-]+;base64,[a-zA-Z0-9+/=]+/g, '[image]')
+    .replace(/[A-Za-z]:\\[^\s"'<>|]+/g, '[path]')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240)
+
+  return summary || undefined
+}
+
+const sanitizeTaskRecord = (record: unknown, now: string): TaskRecord | undefined => {
+  if (!isRecord(record)) {
+    return undefined
+  }
+
+  const id = sanitizeEntityId(record.id)
+  const taskId = stringOrDefault(record.taskId, '').trim()
+  const providerTemplateId =
+    sanitizeCredentialTemplateId(record.providerTemplateId ?? record.apiTemplateId) ?? COMPATIBLE_PROVIDER_TEMPLATE_ID
+  const providerTemplateName = normalizeTitle(record.providerTemplateName ?? record.apiTemplateName, 'Unknown API')
+  const model = normalizeTitle(record.model, '')
+  const taskType = stringOrDefault(record.taskType, 'text_to_image')
+  const status = stringOrDefault(record.status, 'queued')
+  const requestedImageCount = Math.max(0, Math.floor(numberOrDefault(record.requestedImageCount, 1)))
+  const successfulImageCount = Math.max(0, Math.floor(numberOrDefault(record.successfulImageCount, 0)))
+  const unitPrice = nonNegativeNumberOrDefault(record.unitPrice, DEFAULT_UNIT_PRICE)
+  const currency = stringOrDefault(record.currency, DEFAULT_USAGE_CURRENCY)
+  const sanitizedStatus = taskRecordStatusValues.has(status as TaskRecordStatus)
+    ? (status as TaskRecordStatus)
+    : 'queued'
+  const estimatedCost =
+    sanitizedStatus === 'succeeded'
+      ? successfulImageCount * unitPrice
+      : sanitizedStatus === 'failed' || sanitizedStatus === 'canceled'
+        ? 0
+        : nonNegativeNumberOrDefault(record.estimatedCost, requestedImageCount * unitPrice)
+
+  if (!id || !taskId || !model || !taskRecordTypeValues.has(taskType as TaskRecordType)) {
+    return undefined
+  }
+
+  return {
+    id,
+    taskId,
+    providerTemplateId,
+    providerTemplateName,
+    model,
+    taskType: taskType as TaskRecordType,
+    status: sanitizedStatus,
+    ...(sanitizeEntityId(record.conversationId) ? { conversationId: sanitizeEntityId(record.conversationId) } : {}),
+    ...(record.projectId === null
+      ? { projectId: null }
+      : sanitizeEntityId(record.projectId)
+        ? { projectId: sanitizeEntityId(record.projectId) }
+        : {}),
+    ...(sanitizePromptPreview(record.promptPreview ?? record.prompt)
+      ? { promptPreview: sanitizePromptPreview(record.promptPreview ?? record.prompt) }
+      : {}),
+    requestedImageCount,
+    successfulImageCount,
+    unitPrice,
+    currency: currency === DEFAULT_USAGE_CURRENCY ? DEFAULT_USAGE_CURRENCY : DEFAULT_USAGE_CURRENCY,
+    estimatedCost: Math.round(estimatedCost * 10000) / 10000,
+    ...(normalizeOptionalText(record.size) ? { size: normalizeOptionalText(record.size) } : {}),
+    ...(normalizeOptionalText(record.quality) ? { quality: normalizeOptionalText(record.quality) } : {}),
+    ...(normalizeOptionalText(record.outputFormat) ? { outputFormat: normalizeOptionalText(record.outputFormat) } : {}),
+    ...(normalizeOptionalText(record.errorCode) ? { errorCode: normalizeOptionalText(record.errorCode) } : {}),
+    ...(sanitizeErrorSummary(record.errorMessage) ? { errorMessage: sanitizeErrorSummary(record.errorMessage) } : {}),
+    createdAt: isoStringOrDefault(record.createdAt, now),
+    ...(typeof record.startedAt === 'string' ? { startedAt: isoStringOrDefault(record.startedAt, now) } : {}),
+    ...(typeof record.completedAt === 'string' ? { completedAt: isoStringOrDefault(record.completedAt, now) } : {}),
+    updatedAt: isoStringOrDefault(record.updatedAt, now)
+  }
+}
+
+const sanitizeTaskRecords = (records: unknown, now: string): TaskRecord[] => {
+  if (!Array.isArray(records)) {
+    return []
+  }
+
+  const recordMap = new Map<string, TaskRecord>()
+
+  for (const record of records) {
+    const sanitizedRecord = sanitizeTaskRecord(record, now)
+
+    if (sanitizedRecord) {
+      recordMap.set(sanitizedRecord.taskId, sanitizedRecord)
+    }
+  }
+
+  return Array.from(recordMap.values()).sort((firstRecord, secondRecord) => {
+    return Date.parse(secondRecord.createdAt) - Date.parse(firstRecord.createdAt)
+  })
 }
 
 const sanitizeProjectGroup = (project: unknown, now: string): ProjectGroup | undefined => {
@@ -1423,6 +1673,7 @@ export const sanitizeImageToolData = (data: unknown): ImageToolData => {
   const promptTemplateCategoryIds = new Set(promptTemplateCategories.map((category) => category.id))
   const promptTemplates = sanitizePromptTemplates(data.promptTemplates, now, promptTemplateCategoryIds)
   const rawHistoryItems = Array.isArray(data.history) ? data.history : []
+  const taskRecords = sanitizeTaskRecords(data.taskRecords, now)
 
   if (
     conversations.length === 0 &&
@@ -1469,6 +1720,7 @@ export const sanitizeImageToolData = (data: unknown): ImageToolData => {
     activeConversationId: resolvedActiveConversationId,
     trashRetentionDays: positiveIntegerOrDefault(data.trashRetentionDays, 30),
     history,
+    taskRecords,
     promptTemplateCategories,
     promptTemplates
   })
@@ -1480,6 +1732,183 @@ export const getActiveConversationId = (data: ImageToolData): string | undefined
     sanitizedData.activeConversationId ??
     sanitizedData.conversations.find((conversation) => !conversation.deletedAt)?.id
   )
+}
+
+export const createTaskRecord = (data: ImageToolData, input: CreateTaskRecordInput): ImageToolData => {
+  const sanitizedData = sanitizeImageToolData(data)
+
+  if (sanitizedData.taskRecords.some((record) => record.taskId === input.taskId)) {
+    return sanitizedData
+  }
+
+  const now = isoStringOrDefault(input.createdAt, new Date().toISOString())
+  const requestedImageCount = Math.max(0, Math.floor(input.requestedImageCount ?? 1))
+  const unitPrice = getProviderUnitPrice(sanitizedData.settings, input.providerTemplateId)
+  const conversation = input.conversationId
+    ? sanitizedData.conversations.find((item) => item.id === input.conversationId)
+    : undefined
+  const taskRecord = sanitizeTaskRecord(
+    {
+      id: input.id ?? createStorageId('task-record'),
+      taskId: input.taskId,
+      providerTemplateId: input.providerTemplateId,
+      providerTemplateName: input.providerTemplateName,
+      model: input.model,
+      taskType: input.taskType,
+      status: 'queued',
+      conversationId: input.conversationId,
+      projectId: input.projectId ?? conversation?.projectId,
+      promptPreview: sanitizePromptPreview(input.prompt),
+      requestedImageCount,
+      successfulImageCount: 0,
+      unitPrice,
+      currency: sanitizedData.settings.currency,
+      estimatedCost: requestedImageCount * unitPrice,
+      size: input.size,
+      quality: input.quality,
+      outputFormat: input.outputFormat,
+      createdAt: now,
+      updatedAt: now
+    },
+    now
+  )
+
+  if (!taskRecord) {
+    return sanitizedData
+  }
+
+  return {
+    ...sanitizedData,
+    taskRecords: [taskRecord, ...sanitizedData.taskRecords]
+  }
+}
+
+export const updateTaskRecord = (data: ImageToolData, taskId: string, patch: UpdateTaskRecordPatch): ImageToolData => {
+  const sanitizedData = sanitizeImageToolData(data)
+  const recordTaskId = patch.taskId ?? taskId
+  const existingRecord = sanitizedData.taskRecords.find((record) => record.taskId === recordTaskId)
+
+  if (!existingRecord) {
+    return sanitizedData
+  }
+
+  const now = isoStringOrDefault(patch.updatedAt, new Date().toISOString())
+  const status = patch.status ?? existingRecord.status
+  const isTerminal = status === 'succeeded' || status === 'failed' || status === 'canceled'
+  const successfulImageCount =
+    status === 'succeeded'
+      ? Math.max(0, Math.floor(patch.successfulImageCount ?? existingRecord.successfulImageCount))
+      : status === 'failed' || status === 'canceled'
+        ? 0
+        : existingRecord.successfulImageCount
+  const estimatedCost =
+    status === 'succeeded'
+      ? successfulImageCount * existingRecord.unitPrice
+      : status === 'failed' || status === 'canceled'
+        ? 0
+        : existingRecord.requestedImageCount * existingRecord.unitPrice
+  const nextRecord: TaskRecord = {
+    ...existingRecord,
+    status,
+    successfulImageCount,
+    estimatedCost: Math.round(estimatedCost * 10000) / 10000,
+    ...(status === 'running'
+      ? { startedAt: isoStringOrDefault(patch.startedAt, existingRecord.startedAt ?? now) }
+      : {}),
+    ...(patch.startedAt && status !== 'running' ? { startedAt: isoStringOrDefault(patch.startedAt, now) } : {}),
+    ...(isTerminal ? { completedAt: isoStringOrDefault(patch.completedAt, existingRecord.completedAt ?? now) } : {}),
+    ...(patch.errorCode ? { errorCode: normalizeOptionalText(patch.errorCode) } : {}),
+    ...(patch.errorMessage ? { errorMessage: sanitizeErrorSummary(patch.errorMessage) } : {}),
+    updatedAt: now
+  }
+
+  if (status === 'succeeded') {
+    delete nextRecord.errorCode
+    delete nextRecord.errorMessage
+  }
+
+  return {
+    ...sanitizedData,
+    taskRecords: sanitizedData.taskRecords.map((record) => (record.taskId === recordTaskId ? nextRecord : record))
+  }
+}
+
+export const filterTaskRecords = (records: readonly TaskRecord[], filters: TaskRecordFilters = {}): TaskRecord[] => {
+  const existingProviderTemplateIds = new Set(filters.existingProviderTemplateIds ?? [])
+  const createdAtFrom = filters.createdAtFrom ? Date.parse(filters.createdAtFrom) : Number.NaN
+  const createdAtTo = filters.createdAtTo ? Date.parse(filters.createdAtTo) : Number.NaN
+
+  return records.filter((record) => {
+    if (filters.deletedProviderTemplatesOnly && existingProviderTemplateIds.has(record.providerTemplateId)) {
+      return false
+    }
+
+    if (
+      !filters.deletedProviderTemplatesOnly &&
+      filters.providerTemplateId &&
+      record.providerTemplateId !== filters.providerTemplateId
+    ) {
+      return false
+    }
+
+    if (filters.status && record.status !== filters.status) {
+      return false
+    }
+
+    if (filters.taskType && record.taskType !== filters.taskType) {
+      return false
+    }
+
+    const createdAt = Date.parse(record.createdAt)
+
+    if (Number.isFinite(createdAtFrom) && createdAt < createdAtFrom) {
+      return false
+    }
+
+    if (Number.isFinite(createdAtTo) && createdAt > createdAtTo) {
+      return false
+    }
+
+    return true
+  })
+}
+
+export const summarizeTaskUsage = (records: readonly TaskRecord[]): TaskUsageStats => {
+  return records.reduce<TaskUsageStats>(
+    (stats, record) => {
+      const isSucceeded = record.status === 'succeeded'
+      const isFailed = record.status === 'failed'
+      const isRunning = record.status === 'queued' || record.status === 'running'
+
+      return {
+        totalTasks: stats.totalTasks + 1,
+        succeededTasks: stats.succeededTasks + (isSucceeded ? 1 : 0),
+        failedTasks: stats.failedTasks + (isFailed ? 1 : 0),
+        runningTasks: stats.runningTasks + (isRunning ? 1 : 0),
+        successfulImages: stats.successfulImages + (isSucceeded ? record.successfulImageCount : 0),
+        totalCost: Math.round((stats.totalCost + (isSucceeded ? record.estimatedCost : 0)) * 10000) / 10000,
+        currency: stats.currency
+      }
+    },
+    {
+      totalTasks: 0,
+      succeededTasks: 0,
+      failedTasks: 0,
+      runningTasks: 0,
+      successfulImages: 0,
+      totalCost: 0,
+      currency: DEFAULT_USAGE_CURRENCY
+    }
+  )
+}
+
+export const clearTaskRecords = (data: ImageToolData): ImageToolData => {
+  const sanitizedData = sanitizeImageToolData(data)
+
+  return {
+    ...sanitizedData,
+    taskRecords: []
+  }
 }
 
 export const addImageHistoryItem = (data: ImageToolData, item: ImageHistoryItem): ImageToolData => {

@@ -12,16 +12,20 @@ import {
 } from '@hoodmagic/provider-adapters/image2'
 import {
   addImageHistoryItem,
+  clearTaskRecords,
   createConversation,
   createDefaultImageToolSettings,
   createImageFileName,
   createImagePromptPackExport,
   createImagePromptTemplateExport,
   createProjectGroup,
+  createTaskRecord,
   DEFAULT_PROMPT_TEMPLATE_CATEGORY_ID,
   ensureUniqueFilePath,
+  filterTaskRecords,
   getActiveConversationId,
   getImageFileExtension,
+  getImageProviderTemplate,
   type ImageHistoryItem,
   type ImageToolData,
   type ImageToolSettings,
@@ -42,6 +46,11 @@ import {
   sanitizeFileNamePart,
   sanitizeImageToolData,
   setActiveConversation,
+  summarizeTaskUsage,
+  type TaskRecord,
+  type TaskRecordFilters,
+  type TaskRecordType,
+  updateTaskRecord,
   upsertPromptTemplate,
   upsertPromptTemplateCategory
 } from '@hoodmagic/storage'
@@ -76,8 +85,10 @@ import type {
   ImageToolReferenceImage,
   ImageToolSaveImageResultAsPromptTemplateInput,
   ImageToolSessionState,
+  ImageToolTaskUsageSnapshot,
   ImageToolTestConnectionRequest,
-  ImageToolTestConnectionResult
+  ImageToolTestConnectionResult,
+  ImageToolUsagePriceSettings
 } from '../shared/image2'
 
 const imageTasks = new Map<string, ImageToolImageTask>()
@@ -820,6 +831,23 @@ const toSessionState = (data: ImageToolData): ImageToolSessionState => ({
   trashRetentionDays: data.trashRetentionDays
 })
 
+const toUsageSnapshot = (data: ImageToolData, filters: TaskRecordFilters = {}): ImageToolTaskUsageSnapshot => {
+  const records = filterTaskRecords(data.taskRecords, filters)
+
+  return {
+    records,
+    stats: summarizeTaskUsage(records)
+  }
+}
+
+const updateTaskUsageData = async (
+  updater: (data: ImageToolData) => ImageToolData | Promise<ImageToolData>
+): Promise<ImageToolData> => {
+  const data = await readImageToolData()
+  const nextData = await updater(data)
+  return writeImageToolData(nextData)
+}
+
 const resolveWritableConversationData = (
   data: ImageToolData,
   conversationId?: string
@@ -975,7 +1003,9 @@ const removePromptTemplatePreviewAsset = async (assetId?: string): Promise<void>
 const promptTemplatePreviewImageExtensions = ['.png', '.jpg', '.jpeg', '.webp'] as const
 
 const isPromptTemplatePreviewImageFile = (fileName: string): boolean => {
-  return promptTemplatePreviewImageExtensions.includes(extname(fileName).toLowerCase() as (typeof promptTemplatePreviewImageExtensions)[number])
+  return promptTemplatePreviewImageExtensions.includes(
+    extname(fileName).toLowerCase() as (typeof promptTemplatePreviewImageExtensions)[number]
+  )
 }
 
 const isValidPromptTemplatePreviewBuffer = (buffer: Buffer): boolean => {
@@ -1021,17 +1051,19 @@ const savePromptTemplatePreviewAsset = async (
     throw new ImageToolMainError('invalid_preview_image', 'Preview image must be a valid JPEG, PNG, or WEBP image.')
   }
 
-  return savePromptTemplatePreviewAssetBuffer(buffer, templateId, `${templateId}.${getImageFileExtension(undefined, mimeType)}`, mimeType)
+  return savePromptTemplatePreviewAssetBuffer(
+    buffer,
+    templateId,
+    `${templateId}.${getImageFileExtension(undefined, mimeType)}`,
+    mimeType
+  )
 }
 
 const getPromptTemplatePreviewReference = (record: PromptTemplateImportRecord): string | undefined => {
   const previewImage = record.previewImage
-  const reference = [
-    previewImage?.fileName,
-    previewImage?.path,
-    previewImage?.assetId,
-    record.previewImageFile
-  ].find((value) => typeof value === 'string' && value.trim())
+  const reference = [previewImage?.fileName, previewImage?.path, previewImage?.assetId, record.previewImageFile].find(
+    (value) => typeof value === 'string' && value.trim()
+  )
 
   return typeof reference === 'string' ? reference.trim() : undefined
 }
@@ -1067,8 +1099,8 @@ const getPromptTemplatePreviewMatchStems = (
 }
 
 const getUniquePromptTemplatePreviewDirs = (sourceDir?: string): string[] => {
-  const dirs = [getPromptLibraryAssetsDir(), getPromptLibraryImportsDir(), sourceDir].filter(
-    (dir): dir is string => Boolean(dir)
+  const dirs = [getPromptLibraryAssetsDir(), getPromptLibraryImportsDir(), sourceDir].filter((dir): dir is string =>
+    Boolean(dir)
   )
   const uniqueDirs = new Set<string>()
 
@@ -1334,6 +1366,41 @@ const writePromptTemplateExport = async (
   }
 }
 
+const escapeCsvField = (value: unknown): string => {
+  const text = String(value ?? '')
+
+  if (/[",\r\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`
+  }
+
+  return text
+}
+
+const createTaskUsageCsv = (data: ImageToolData, filters: TaskRecordFilters): string => {
+  const records = filterTaskRecords(data.taskRecords, filters)
+  const header = ['time', 'apiTemplate', 'type', 'status', 'model', 'size', 'imageCount', 'unitPrice', 'cost']
+  const getRecordCost = (record: TaskRecord): number => {
+    if (record.status === 'failed' || record.status === 'canceled') {
+      return 0
+    }
+    return record.estimatedCost
+  }
+
+  const rows = records.map((record) => [
+    record.createdAt,
+    record.providerTemplateName,
+    record.taskType,
+    record.status,
+    record.model,
+    record.size ?? '',
+    record.status === 'succeeded' ? record.successfulImageCount : record.requestedImageCount,
+    record.unitPrice.toFixed(4),
+    getRecordCost(record).toFixed(2)
+  ])
+
+  return [header, ...rows].map((row) => row.map(escapeCsvField).join(',')).join('\n')
+}
+
 const readHistoryImageDataUrl = async (data: ImageToolData, id: string): Promise<string | undefined> => {
   const item = data.history.find((historyItem) => historyItem.id === id)
 
@@ -1404,7 +1471,10 @@ const importPromptTemplateRecords = async (
   const knownTemplatesByFingerprint = new Map<string, PromptTemplate>()
 
   for (const template of data.promptTemplates) {
-    knownTemplatesByFingerprint.set(createTemplateFingerprint(template, await readPromptTemplatePreview(template)), template)
+    knownTemplatesByFingerprint.set(
+      createTemplateFingerprint(template, await readPromptTemplatePreview(template)),
+      template
+    )
     knownTemplatesByFingerprint.set(createTemplateFingerprint(template, undefined), template)
   }
 
@@ -1652,6 +1722,104 @@ const saveTask = (task: ImageToolImageTask, eventType: TaskEvent['type']): Image
   return task
 }
 
+const getTaskRecordType = (request: ImageToolGenerateImage2Request | ImageToolEditImage2Request): TaskRecordType => {
+  if ('images' in request) {
+    return request.editMode === 'masked_edit' || request.mask ? 'image_edit' : 'image_to_image'
+  }
+
+  return 'text_to_image'
+}
+
+const resolveTaskProviderSnapshot = (
+  data: ImageToolData,
+  request: ImageToolGenerateImage2Request | ImageToolEditImage2Request
+): { providerTemplateId: string; providerTemplateName: string } => {
+  const providerTemplateId = request.providerTemplateId ?? data.settings.providerTemplateId
+  const providerTemplate = getImageProviderTemplate(providerTemplateId, data.settings.customProviderTemplates)
+
+  return {
+    providerTemplateId,
+    providerTemplateName: request.providerTemplateName?.trim() || providerTemplate.name
+  }
+}
+
+const createQueuedTaskUsageRecord = async (
+  task: ImageToolImageTask,
+  request: ImageToolGenerateImage2Request | ImageToolEditImage2Request
+): Promise<void> => {
+  try {
+    await updateTaskUsageData((data) => {
+      const providerSnapshot = resolveTaskProviderSnapshot(data, request)
+      const conversation = task.request.conversationId
+        ? data.conversations.find((item) => item.id === task.request.conversationId)
+        : undefined
+
+      return createTaskRecord(data, {
+        taskId: task.id,
+        providerTemplateId: providerSnapshot.providerTemplateId,
+        providerTemplateName: providerSnapshot.providerTemplateName,
+        model: task.request.model,
+        taskType: getTaskRecordType(request),
+        conversationId: task.request.conversationId,
+        projectId: request.projectId ?? conversation?.projectId,
+        prompt: task.request.prompt,
+        requestedImageCount: task.request.n ?? request.n ?? 1,
+        size: task.request.size,
+        quality: task.request.quality ?? request.quality,
+        outputFormat: task.request.outputFormat ?? request.outputFormat,
+        createdAt: new Date(task.createdAt).toISOString()
+      })
+    })
+  } catch (error) {
+    console.warn('[image-tool] failed to create task usage record', error)
+  }
+}
+
+const markTaskUsageRunning = async (task: ImageToolImageTask): Promise<void> => {
+  try {
+    await updateTaskUsageData((data) =>
+      updateTaskRecord(data, task.id, {
+        status: 'running',
+        startedAt: new Date(task.startedAt ?? Date.now()).toISOString(),
+        updatedAt: new Date(task.updatedAt).toISOString()
+      })
+    )
+  } catch (error) {
+    console.warn('[image-tool] failed to mark task usage running', error)
+  }
+}
+
+const markTaskUsageSucceeded = async (task: ImageToolImageTask, successfulImageCount?: number): Promise<void> => {
+  try {
+    await updateTaskUsageData((data) =>
+      updateTaskRecord(data, task.id, {
+        status: 'succeeded',
+        successfulImageCount: successfulImageCount ?? task.result?.images.length ?? 0,
+        completedAt: new Date(task.finishedAt ?? Date.now()).toISOString(),
+        updatedAt: new Date(task.updatedAt).toISOString()
+      })
+    )
+  } catch (error) {
+    console.warn('[image-tool] failed to mark task usage succeeded', error)
+  }
+}
+
+const markTaskUsageFailed = async (task: ImageToolImageTask): Promise<void> => {
+  try {
+    await updateTaskUsageData((data) =>
+      updateTaskRecord(data, task.id, {
+        status: 'failed',
+        errorCode: task.error?.code,
+        errorMessage: task.error?.message,
+        completedAt: new Date(task.finishedAt ?? Date.now()).toISOString(),
+        updatedAt: new Date(task.updatedAt).toISOString()
+      })
+    )
+  } catch (error) {
+    console.warn('[image-tool] failed to mark task usage failed', error)
+  }
+}
+
 const toTaskError = (error: unknown, apiKey: string): TaskError => {
   if (error instanceof Image2AdapterError) {
     return {
@@ -1799,6 +1967,7 @@ const executeImageTask = async (taskId: string, request: ImageToolGenerateImage2
   }
 
   const runningTask = saveTask(markTaskRunning(queuedTask), 'updated')
+  await markTaskUsageRunning(runningTask)
 
   try {
     const result = await generateImageWithImage2({
@@ -1847,9 +2016,12 @@ const executeImageTask = async (taskId: string, request: ImageToolGenerateImage2
       result: taskResult,
       request
     })
+    await markTaskUsageSucceeded(succeededTask)
     saveTask(succeededTask, 'succeeded')
   } catch (error) {
-    saveTask(markTaskFailed(runningTask, toTaskError(error, request.apiKey)), 'failed')
+    const failedTask = markTaskFailed(runningTask, toTaskError(error, request.apiKey))
+    await markTaskUsageFailed(failedTask)
+    saveTask(failedTask, 'failed')
   }
 }
 
@@ -1861,6 +2033,7 @@ const executeImageEditTask = async (taskId: string, request: ImageToolEditImage2
   }
 
   const runningTask = saveTask(markTaskRunning(queuedTask), 'updated')
+  await markTaskUsageRunning(runningTask)
 
   try {
     const referenceImages = materializeReferenceImages(request.images)
@@ -1955,9 +2128,12 @@ const executeImageEditTask = async (taskId: string, request: ImageToolEditImage2
       result: taskResult,
       request
     })
+    await markTaskUsageSucceeded(succeededTask)
     saveTask(succeededTask, 'succeeded')
   } catch (error) {
-    saveTask(markTaskFailed(runningTask, toTaskError(error, request.apiKey)), 'failed')
+    const failedTask = markTaskFailed(runningTask, toTaskError(error, request.apiKey))
+    await markTaskUsageFailed(failedTask)
+    saveTask(failedTask, 'failed')
   }
 }
 
@@ -1988,6 +2164,11 @@ const registerImageToolIpc = (): void => {
       if (!isNonEmptyString(request.size)) {
         return createImageToolError('missing_size', 'Resolved image size is required.')
       }
+
+      const task = createImageGenerationTask(request)
+      await createQueuedTaskUsageRecord(task, request)
+      const runningTask = markTaskRunning(task)
+      await markTaskUsageRunning(runningTask)
 
       try {
         const result = await generateImageWithImage2({
@@ -2037,6 +2218,26 @@ const registerImageToolIpc = (): void => {
           })
         )
 
+        const taskResult: ImageToolImageGenerationResult = {
+          images: [
+            {
+              ...result.images[0],
+              previewDataUrl: materializedImage.previewDataUrl
+            }
+          ],
+          request: result.request,
+          historyId,
+          previewDataUrl: materializedImage.previewDataUrl,
+          imageMimeType: materializedImage.imageMimeType,
+          imageFileName: materializedImage.imageFileName
+        }
+        const succeededTask: ImageToolImageTask = {
+          ...markTaskSucceeded(runningTask, taskResult),
+          result: taskResult
+        }
+
+        await markTaskUsageSucceeded(succeededTask, result.images.length)
+
         return {
           ok: true,
           images: [
@@ -2053,6 +2254,7 @@ const registerImageToolIpc = (): void => {
         }
       } catch (error) {
         if (error instanceof Image2AdapterError) {
+          await markTaskUsageFailed(markTaskFailed(runningTask, toTaskError(error, request.apiKey)))
           return createImageToolError(error.code, sanitizeErrorMessage(error.message, request.apiKey), {
             status: error.status,
             upstreamType: error.upstreamType,
@@ -2063,11 +2265,13 @@ const registerImageToolIpc = (): void => {
         }
 
         if (error instanceof ImageToolMainError) {
+          await markTaskUsageFailed(markTaskFailed(runningTask, toTaskError(error, request.apiKey)))
           return createImageToolError(error.code, sanitizeErrorMessage(error.message, request.apiKey), {
             status: error.status
           })
         }
 
+        await markTaskUsageFailed(markTaskFailed(runningTask, toTaskError(error, request.apiKey)))
         return createImageToolError(
           'image2_generation_failed',
           error instanceof Error ? sanitizeErrorMessage(error.message, request.apiKey) : 'Image2 generation failed.'
@@ -2238,6 +2442,7 @@ const registerImageToolIpc = (): void => {
 
       const task = createImageGenerationTask(executionRequest)
       saveTask(task, 'created')
+      await createQueuedTaskUsageRecord(task, executionRequest)
       void executeImageTask(task.id, executionRequest)
       return task
     }
@@ -2329,6 +2534,7 @@ const registerImageToolIpc = (): void => {
       })
 
       saveTask(task, 'created')
+      await createQueuedTaskUsageRecord(task, executionRequest)
       void executeImageEditTask(task.id, executionRequest)
       return task
     }
@@ -2341,6 +2547,59 @@ const registerImageToolIpc = (): void => {
   ipcMain.handle('image-tool:list-image-tasks', (): ImageToolImageTask[] => {
     return Array.from(imageTasks.values())
   })
+
+  ipcMain.handle(
+    'image-tool:list-task-usage',
+    async (_event, filters?: TaskRecordFilters): Promise<ImageToolTaskUsageSnapshot> => {
+      const data = await readImageToolData()
+      return toUsageSnapshot(data, filters)
+    }
+  )
+
+  ipcMain.handle(
+    'image-tool:save-usage-price-settings',
+    async (_event, settings: ImageToolUsagePriceSettings): Promise<ImageToolSettings> => {
+      const data = await readImageToolData()
+      const sanitizedData = sanitizeImageToolData({
+        ...data,
+        settings: {
+          ...data.settings,
+          defaultUnitPrice: settings.defaultUnitPrice,
+          currency: settings.currency,
+          providerUnitPrices: settings.providerUnitPrices
+        }
+      })
+
+      await writeImageToolData(sanitizedData)
+      return sanitizedData.settings
+    }
+  )
+
+  ipcMain.handle('image-tool:clear-task-usage', async (): Promise<ImageToolTaskUsageSnapshot> => {
+    const nextData = await writeImageToolData(clearTaskRecords(await readImageToolData()))
+    return toUsageSnapshot(nextData)
+  })
+
+  ipcMain.handle(
+    'image-tool:export-task-usage-csv',
+    async (_event, filters?: TaskRecordFilters): Promise<ImageToolPromptTemplateExportResult> => {
+      await ensureImageToolDataDir()
+      const data = await readImageToolData()
+      const timestamp = new Date()
+        .toISOString()
+        .replace(/[-:]/g, '')
+        .replace(/\.\d{3}Z$/, 'Z')
+      const fileName = `task-usage-${timestamp}.csv`
+      const filePath = ensureUniqueFilePath(getPromptLibraryExportsDir(), fileName)
+
+      await writeFile(filePath, `${createTaskUsageCsv(data, filters ?? {})}\n`, 'utf8')
+
+      return {
+        filePath,
+        fileName: basename(filePath)
+      }
+    }
+  )
 
   ipcMain.handle('image-tool:get-session-state', async (): Promise<ImageToolSessionState> => {
     const data = await writeImageToolData(await readImageToolData())
