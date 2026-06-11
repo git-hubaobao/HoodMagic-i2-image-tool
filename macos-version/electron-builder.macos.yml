@@ -1,6 +1,6 @@
 extends: null
 appId: com.hoodmagic.i2.imagetool
-productName: HoodMagic???
+productName: HoodMagic小魔帽
 directories:
   output: ../../macos-version/dist
 files:
