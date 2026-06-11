@@ -1,0 +1,35 @@
+name: Build macOS Installer
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.11.1
+          cache: pnpm
+
+      - name: Build macOS package
+        run: |
+          chmod +x macos-version/scripts/build-macos.sh
+          macos-version/scripts/build-macos.sh
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: hoodmagic-i2-macos
+          path: macos-version/dist/**
+          if-no-files-found: error

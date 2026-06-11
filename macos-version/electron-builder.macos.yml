@@ -1,0 +1,25 @@
+extends: null
+appId: com.hoodmagic.i2.imagetool
+productName: HoodMagic???
+directories:
+  output: ../../macos-version/dist
+files:
+  - out/**/*
+  - package.json
+asar: true
+npmRebuild: false
+artifactName: HoodMagic-i2-mac-${arch}-${version}.${ext}
+mac:
+  icon: ../../macos-version/assets/icon.icns
+  category: public.app-category.graphics-design
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+  target:
+    - dmg
+    - zip
+dmg:
+  title: HoodMagic i2 ${version}
+  artifactName: HoodMagic-i2-mac-${arch}-${version}.${ext}
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
