@@ -206,7 +206,7 @@ type PreviewSize = {
   height?: number
 }
 
-type ImagePreviewOrientation = 'landscape' | 'portrait' | 'square'
+type ImagePreviewOrientation = 'landscape' | 'portrait' | 'square' | 'long'
 
 type ImagePreviewLayout = {
   aspectRatioValue: string
@@ -412,6 +412,7 @@ type UsageProviderFilter = 'all' | 'deleted' | string
 type UsageStatusFilter = 'all' | ImageToolTaskRecord['status']
 type UsageTypeFilter = 'all' | ImageToolTaskRecord['taskType']
 type UsageTimeRangeFilter = 'all' | 'today' | '7d' | '30d'
+type PromptTemplateCardScale = 'compact' | 'comfortable' | 'large'
 
 type UsageFilters = {
   providerTemplateId: UsageProviderFilter
@@ -422,6 +423,7 @@ type UsageFilters = {
 
 const CUSTOM_LOGO_STORAGE_KEY = 'image-tool:custom-logo-data-url'
 const COLLAPSED_PROJECT_IDS_STORAGE_KEY = 'image-tool:collapsed-project-ids'
+const PROMPT_TEMPLATE_CARD_SCALE_STORAGE_KEY = 'image-tool:prompt-template-card-scale'
 const UNGROUPED_PROJECT_KEY = '__ungrouped__'
 const LOGO_ACCEPTED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'])
 const LOGO_ACCEPTED_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg'])
@@ -467,6 +469,15 @@ const readStoredStringArray = (key: string): string[] => {
 
 const writeStoredStringArray = (key: string, value: readonly string[]): void => {
   writeStoredValue(key, JSON.stringify(value))
+}
+
+const isPromptTemplateCardScale = (value: string | undefined): value is PromptTemplateCardScale => {
+  return value === 'compact' || value === 'comfortable' || value === 'large'
+}
+
+const readStoredPromptTemplateCardScale = (): PromptTemplateCardScale => {
+  const storedValue = readStoredValue(PROMPT_TEMPLATE_CARD_SCALE_STORAGE_KEY)
+  return isPromptTemplateCardScale(storedValue) ? storedValue : 'comfortable'
 }
 
 const isSupportedLogoFile = (file: File): boolean => {
@@ -602,6 +613,10 @@ const enCopy = {
   scanImport: 'Scan imports',
   openTemplateFolder: 'Open template folder',
   searchTemplates: 'Search templates',
+  templateCardSize: 'Card size',
+  templateCardCompact: 'Compact',
+  templateCardComfortable: 'Standard',
+  templateCardLarge: 'Large',
   allTemplateTypes: 'All types',
   textToImage: 'Text to image',
   imageToImage: 'Image to image',
@@ -982,6 +997,10 @@ const zhCopy: CopyText = {
   scanImport: '扫描导入',
   openTemplateFolder: '打开模板文件夹',
   searchTemplates: '搜索模板',
+  templateCardSize: '卡片大小',
+  templateCardCompact: '紧凑',
+  templateCardComfortable: '标准',
+  templateCardLarge: '宽松',
   allTemplateTypes: '全部类型',
   textToImage: '文生图',
   imageToImage: '图生图',
@@ -1377,11 +1396,13 @@ const getProviderTemplateLabel = (
   }
 }
 
-const MAX_LANDSCAPE_PREVIEW_WIDTH = 680
-const MAX_LANDSCAPE_PREVIEW_HEIGHT = 360
-const MAX_PORTRAIT_PREVIEW_WIDTH = 420
-const MAX_PORTRAIT_PREVIEW_HEIGHT = 420
-const MAX_SQUARE_PREVIEW_SIZE = 460
+const MAX_LANDSCAPE_PREVIEW_WIDTH = 420
+const MAX_LANDSCAPE_PREVIEW_HEIGHT = 240
+const MAX_PORTRAIT_PREVIEW_WIDTH = 220
+const MAX_PORTRAIT_PREVIEW_HEIGHT = 340
+const MAX_LONG_PREVIEW_WIDTH = 260
+const MAX_LONG_PREVIEW_HEIGHT = 320
+const MAX_SQUARE_PREVIEW_SIZE = 320
 const FALLBACK_PREVIEW_SIZE = {
   width: 1024,
   height: 768
@@ -2522,6 +2543,10 @@ const getPreviewOrientation = (aspectRatio: number): ImagePreviewOrientation => 
     return 'square'
   }
 
+  if (aspectRatio < 0.48) {
+    return 'long'
+  }
+
   return aspectRatio > 1 ? 'landscape' : 'portrait'
 }
 
@@ -2541,6 +2566,16 @@ const getImagePreviewLayout = ({
   })
   const aspectRatio = dimensions.width / dimensions.height
   const orientation = getPreviewOrientation(aspectRatio)
+
+  if (orientation === 'long') {
+    return {
+      aspectRatioValue: `${dimensions.width} / ${dimensions.height}`,
+      maxHeight: MAX_LONG_PREVIEW_HEIGHT,
+      maxWidth: MAX_LONG_PREVIEW_WIDTH,
+      orientation,
+      width: Math.min(MAX_LONG_PREVIEW_WIDTH, dimensions.width)
+    }
+  }
 
   if (orientation === 'portrait') {
     const height = Math.min(MAX_PORTRAIT_PREVIEW_HEIGHT, dimensions.height)
@@ -3406,6 +3441,9 @@ export function App(): React.JSX.Element {
   const [selectedPromptTemplateCategoryId, setSelectedPromptTemplateCategoryId] = useState<string>('all')
   const [promptTemplateSearch, setPromptTemplateSearch] = useState('')
   const [promptTemplateTypeFilter, setPromptTemplateTypeFilter] = useState<PromptTemplateTypeFilter>('all')
+  const [promptTemplateCardScale, setPromptTemplateCardScale] = useState<PromptTemplateCardScale>(
+    readStoredPromptTemplateCardScale
+  )
   const [selectedPromptTemplateIds, setSelectedPromptTemplateIds] = useState<Set<string>>(() => new Set())
   const [promptTemplateEditorDraft, setPromptTemplateEditorDraft] = useState<PromptTemplateEditorDraft>()
   const [promptTemplateCategoryDialog, setPromptTemplateCategoryDialog] = useState<PromptTemplateCategoryDialogState>()
@@ -4149,6 +4187,10 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     writeStoredStringArray(COLLAPSED_PROJECT_IDS_STORAGE_KEY, Array.from(collapsedProjectIds))
   }, [collapsedProjectIds])
+
+  useEffect(() => {
+    writeStoredValue(PROMPT_TEMPLATE_CARD_SCALE_STORAGE_KEY, promptTemplateCardScale)
+  }, [promptTemplateCardScale])
 
   useEffect(() => {
     setUsageProviderPriceDraft(String(providerUnitPrices[providerTemplateId] ?? defaultUnitPrice))
@@ -6685,9 +6727,11 @@ export function App(): React.JSX.Element {
             onSearchChange={setPromptTemplateSearch}
             onSelectAllVisibleTemplates={toggleVisiblePromptTemplateSelection}
             onSelectionChange={togglePromptTemplateSelection}
+            onCardScaleChange={setPromptTemplateCardScale}
             onTypeFilterChange={setPromptTemplateTypeFilter}
             onUseTemplate={handleUsePromptTemplate}
             onClearSelection={clearPromptTemplateSelection}
+            cardScale={promptTemplateCardScale}
             selectedTemplateCount={selectedPromptTemplateCount}
             selectedTemplateIds={selectedPromptTemplateIds}
             search={promptTemplateSearch}
@@ -7573,9 +7617,11 @@ function PromptLibraryPanel({
   onSearchChange,
   onSelectAllVisibleTemplates,
   onSelectionChange,
+  onCardScaleChange,
   onTypeFilterChange,
   onUseTemplate,
   onClearSelection,
+  cardScale,
   search,
   selectedTemplateCount,
   selectedTemplateIds,
@@ -7608,9 +7654,11 @@ function PromptLibraryPanel({
   onSearchChange: (value: string) => void
   onSelectAllVisibleTemplates: () => void
   onSelectionChange: (templateId: string, selected: boolean) => void
+  onCardScaleChange: (scale: PromptTemplateCardScale) => void
   onTypeFilterChange: (value: PromptTemplateTypeFilter) => void
   onUseTemplate: (template: ImageToolPromptTemplate) => void
   onClearSelection: () => void
+  cardScale: PromptTemplateCardScale
   search: string
   selectedTemplateCount: number
   selectedTemplateIds: ReadonlySet<string>
@@ -7720,6 +7768,24 @@ function PromptLibraryPanel({
               <button className="secondary-button" onClick={onOpenFolder} type="button">
                 {currentCopy.openTemplateFolder}
               </button>
+              <div className="prompt-template-card-scale" aria-label={currentCopy.templateCardSize}>
+                <span>{currentCopy.templateCardSize}</span>
+                {(['compact', 'comfortable', 'large'] as const).map((scale) => (
+                  <button
+                    aria-pressed={cardScale === scale}
+                    className="secondary-button"
+                    key={scale}
+                    onClick={() => onCardScaleChange(scale)}
+                    type="button"
+                  >
+                    {scale === 'compact'
+                      ? currentCopy.templateCardCompact
+                      : scale === 'comfortable'
+                        ? currentCopy.templateCardComfortable
+                        : currentCopy.templateCardLarge}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="prompt-template-bulk-actions">
               <button
@@ -7784,7 +7850,7 @@ function PromptLibraryPanel({
             {filteredTemplates.length === 0 ? (
               <p className="prompt-template-empty">{currentCopy.noTemplates}</p>
             ) : (
-              <div className="prompt-template-grid">
+              <div className="prompt-template-grid" data-card-scale={cardScale}>
                 {filteredTemplates.map((template) => (
                   <PromptTemplateCard
                     key={template.id}

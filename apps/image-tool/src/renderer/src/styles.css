@@ -619,8 +619,8 @@ h1 {
 .message-image-result .message-bubble,
 .image-result-card {
   width: fit-content;
-  max-width: min(720px, 100%);
-  padding: 8px;
+  max-width: min(460px, 100%);
+  padding: 6px;
   border-color: rgba(15, 23, 42, 0.08);
   border-radius: 16px;
   background: #ffffff;
@@ -708,18 +708,20 @@ h1 {
   gap: 0;
   width: fit-content;
   min-width: 0;
-  max-width: 100%;
+  max-width: min(460px, 100%);
   justify-items: start;
 }
 
 .image-preview-frame {
   position: relative;
-  display: block;
-  width: min(var(--preview-width, 680px), var(--preview-max-width, 680px), 100%);
-  max-width: min(var(--preview-max-width, 680px), 100%);
-  max-height: min(var(--preview-max-height, 360px), 38vh);
-  aspect-ratio: var(--preview-aspect-ratio, 4 / 3);
-  justify-self: start;
+  display: grid;
+  width: min(var(--preview-width, 420px), var(--preview-max-width, 420px), 100%);
+  max-width: 100%;
+  max-height: var(--preview-max-height, 240px);
+  aspect-ratio: auto;
+  place-items: center;
+  justify-content: center;
+  justify-self: center;
   overflow: hidden;
   padding: 0;
   border: 1px solid rgba(15, 23, 42, 0.1);
@@ -779,22 +781,51 @@ h1 {
 }
 
 .image-preview-portrait {
-  max-width: min(var(--preview-max-width, 420px), 100%);
-  max-height: min(var(--preview-max-height, 420px), 38vh);
+  width: min(var(--preview-width, 220px), var(--preview-max-width, 220px), 100%);
+  max-width: 100%;
 }
 
 .image-preview-square {
-  max-width: min(var(--preview-max-width, 460px), 100%);
-  max-height: min(var(--preview-max-height, 460px), 38vh);
+  width: min(var(--preview-width, 320px), var(--preview-max-width, 320px), 100%);
+  max-width: 100%;
+}
+
+.image-preview-long {
+  width: min(var(--preview-width, 260px), var(--preview-max-width, 260px), 100%);
+  max-width: 100%;
+  max-height: min(var(--preview-max-height, 320px), 48vh);
+  align-items: start;
+  justify-items: center;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .image-preview-frame img {
   display: block;
+  justify-self: center;
+  align-self: center;
   width: auto;
   height: auto;
   max-width: 100%;
-  max-height: min(var(--preview-max-height, 360px), 38vh);
+  max-height: none;
+  border-radius: inherit;
+  margin: 0 auto;
   object-fit: contain;
+}
+
+.image-preview-long img {
+  align-self: start;
+}
+
+.image-result-card:has(.image-preview-portrait),
+.message-image-result .message-bubble:has(.image-preview-portrait) {
+  max-width: min(340px, 100%);
+}
+
+.image-result-card:has(.image-preview-long),
+.message-image-result .message-bubble:has(.image-preview-long) {
+  max-width: min(360px, 100%);
 }
 
 .mask-editor-canvas {
@@ -2257,6 +2288,26 @@ h1 {
   margin-top: 10px;
 }
 
+.prompt-template-card-scale {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+}
+
+.prompt-template-card-scale span {
+  color: #526177;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.prompt-template-card-scale button[aria-pressed='true'] {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .prompt-template-bulk-actions {
   align-items: center;
   margin-top: 10px;
@@ -2290,7 +2341,7 @@ h1 {
 
 .prompt-template-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(var(--prompt-template-card-min-width, 220px), 1fr));
   gap: 12px;
   min-height: 0;
   margin-top: 12px;
@@ -2302,6 +2353,7 @@ h1 {
   position: relative;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: var(--prompt-template-card-height, auto);
   overflow: hidden;
   border: 1px solid #dbe4f0;
   border-radius: 8px;
@@ -2425,20 +2477,23 @@ h1 {
 }
 
 .prompt-template-card-actions {
-  display: grid;
-  grid-template-columns: 1fr repeat(4, auto);
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
   padding: 10px;
   border-top: 1px solid #edf2f7;
 }
 
 .prompt-template-card-actions .secondary-button {
+  flex: 1 1 58px;
   min-height: 30px;
   padding: 0 7px;
   font-size: 11px;
 }
 
 .prompt-template-use-button {
+  flex: 1 1 74px;
   min-height: 30px;
   padding: 0 12px;
 }
@@ -2738,12 +2793,16 @@ h1 {
   }
 
   .image-preview-frame {
-    max-height: 38vh;
+    max-height: var(--preview-max-height, 240px);
   }
 
   .image-preview-portrait {
-    width: min(100%, 300px);
-    max-height: 44vh;
+    width: min(var(--preview-width, 220px), var(--preview-max-width, 220px), 100%);
+    max-height: var(--preview-max-height, 340px);
+  }
+
+  .image-preview-long {
+    max-height: min(var(--preview-max-height, 320px), 48vh);
   }
 
   .image-edit-workspace {
@@ -3457,8 +3516,8 @@ h1 {
 
 .message-image-result .message-bubble,
 .image-result-card {
-  max-width: min(760px, 100%);
-  padding: 10px;
+  max-width: min(460px, 100%);
+  padding: 7px;
   border-color: rgba(255, 255, 255, 0.1);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.055);
@@ -5470,6 +5529,29 @@ h1 {
   font-size: 11px;
 }
 
+.prompt-template-card-scale {
+  min-height: 30px;
+  padding: 2px 4px 2px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.prompt-template-card-scale span {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.prompt-template-card-scale .secondary-button {
+  min-height: 26px;
+  padding: 0 7px;
+  font-size: 10.5px;
+}
+
+.prompt-template-card-scale .secondary-button[aria-pressed='true'] {
+  background: rgba(34, 197, 94, 0.16);
+  color: #86efac;
+}
+
 .prompt-template-bulk-actions {
   gap: 5px;
   margin-top: 6px;
@@ -5500,14 +5582,26 @@ h1 {
 }
 
 .prompt-template-grid {
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  --prompt-template-card-height: 318px;
+  --prompt-template-card-min-width: 230px;
+  grid-template-columns: repeat(auto-fill, minmax(var(--prompt-template-card-min-width), 1fr));
   gap: 10px;
   margin-top: 10px;
 }
 
+.prompt-template-grid[data-card-scale='compact'] {
+  --prompt-template-card-height: 266px;
+  --prompt-template-card-min-width: 188px;
+}
+
+.prompt-template-grid[data-card-scale='large'] {
+  --prompt-template-card-height: 386px;
+  --prompt-template-card-min-width: 292px;
+}
+
 .prompt-template-card {
-  height: 292px;
-  min-height: 292px;
+  height: var(--prompt-template-card-height);
+  min-height: var(--prompt-template-card-height);
   border-radius: 7px;
   background: rgba(255, 255, 255, 0.032);
   overflow: hidden;
@@ -5584,7 +5678,8 @@ h1 {
 }
 
 .prompt-template-card-actions {
-  grid-template-columns: minmax(72px, 1fr) repeat(4, minmax(0, auto));
+  display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   padding: 7px 9px 9px;
   align-items: center;
@@ -5593,13 +5688,20 @@ h1 {
 .prompt-template-card-actions button,
 .prompt-template-card-actions .secondary-button,
 .prompt-template-use-button {
+  flex: 1 1 54px;
   min-height: 26px;
   padding: 0 7px;
   border-radius: 6px;
   font-size: 10.5px;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  justify-content: center;
+  overflow: visible;
+  text-align: center;
+  white-space: normal;
+}
+
+.prompt-template-use-button {
+  flex-basis: 68px;
 }
 
 .settings-drawer {
@@ -5894,7 +5996,7 @@ h1 {
 }
 
 .prompt-template-card-actions button {
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /* Regression fixes: restore composer behavior/layout from the earlier working baseline. */
