@@ -390,6 +390,12 @@ type PromptTemplateCategoryDialogState =
       error?: string
     }
 
+type PromptTemplatePreviewDialogState = {
+  imageDataUrl: string
+  title: string
+  description?: string
+}
+
 type ConfirmationDialogState = {
   cancelLabel: string
   confirmLabel: string
@@ -3447,6 +3453,7 @@ export function App(): React.JSX.Element {
   const [selectedPromptTemplateIds, setSelectedPromptTemplateIds] = useState<Set<string>>(() => new Set())
   const [promptTemplateEditorDraft, setPromptTemplateEditorDraft] = useState<PromptTemplateEditorDraft>()
   const [promptTemplateCategoryDialog, setPromptTemplateCategoryDialog] = useState<PromptTemplateCategoryDialogState>()
+  const [promptTemplatePreview, setPromptTemplatePreview] = useState<PromptTemplatePreviewDialogState>()
   const [promptTemplateVariableDialog, setPromptTemplateVariableDialog] = useState<PromptTemplateVariableDialogState>()
   const [appliedPromptTemplateType, setAppliedPromptTemplateType] = useState<ImageToolPromptTemplateType>()
   const [promptTemplateReferenceNotice, setPromptTemplateReferenceNotice] = useState<string>()
@@ -5412,6 +5419,20 @@ export function App(): React.JSX.Element {
     applyPromptTemplateToComposer(template, template.prompt, 'replace')
   }
 
+  const handlePreviewPromptTemplateImage = (template: ImageToolPromptTemplate) => {
+    if (!template.previewDataUrl) {
+      return
+    }
+
+    const description = template.description?.trim()
+
+    setPromptTemplatePreview({
+      description: description || undefined,
+      imageDataUrl: template.previewDataUrl,
+      title: template.title
+    })
+  }
+
   const handleApplyPromptTemplateVariables = () => {
     if (!promptTemplateVariableDialog) {
       return
@@ -6723,6 +6744,7 @@ export function App(): React.JSX.Element {
             onImport={() => promptTemplateImportInputRef.current?.click()}
             onMoveSelectedTemplates={handleMoveSelectedPromptTemplates}
             onOpenFolder={handleOpenPromptTemplateFolder}
+            onPreviewTemplateImage={handlePreviewPromptTemplateImage}
             onScanImports={handleScanPromptTemplateImports}
             onSearchChange={setPromptTemplateSearch}
             onSelectAllVisibleTemplates={toggleVisiblePromptTemplateSelection}
@@ -7025,6 +7047,13 @@ export function App(): React.JSX.Element {
           onCancel={() => setPromptTemplateVariableDialog(undefined)}
           onChange={setPromptTemplateVariableDialog}
           onSubmit={handleApplyPromptTemplateVariables}
+          text={currentCopy}
+        />
+      )}
+      {promptTemplatePreview && (
+        <PromptTemplatePreviewLightbox
+          preview={promptTemplatePreview}
+          onClose={() => setPromptTemplatePreview(undefined)}
           text={currentCopy}
         />
       )}
@@ -7613,6 +7642,7 @@ function PromptLibraryPanel({
   onImport,
   onMoveSelectedTemplates,
   onOpenFolder,
+  onPreviewTemplateImage,
   onScanImports,
   onSearchChange,
   onSelectAllVisibleTemplates,
@@ -7650,6 +7680,7 @@ function PromptLibraryPanel({
   onImport: () => void
   onMoveSelectedTemplates: (categoryId: string) => void
   onOpenFolder: () => void
+  onPreviewTemplateImage: (template: ImageToolPromptTemplate) => void
   onScanImports: () => void
   onSearchChange: (value: string) => void
   onSelectAllVisibleTemplates: () => void
@@ -7861,6 +7892,7 @@ function PromptLibraryPanel({
                     onDelete={onDeleteTemplate}
                     onEdit={onEditTemplate}
                     onExport={onExportTemplate}
+                    onPreviewImage={onPreviewTemplateImage}
                     onSelectionChange={onSelectionChange}
                     onUse={onUseTemplate}
                   />
@@ -7880,6 +7912,7 @@ function PromptTemplateCard({
   onDelete,
   onEdit,
   onExport,
+  onPreviewImage,
   onSelectionChange,
   onUse,
   template,
@@ -7890,6 +7923,7 @@ function PromptTemplateCard({
   onDelete: (template: ImageToolPromptTemplate) => void
   onEdit: (template: ImageToolPromptTemplate) => void
   onExport: (template: ImageToolPromptTemplate) => void
+  onPreviewImage: (template: ImageToolPromptTemplate) => void
   onSelectionChange: (templateId: string, selected: boolean) => void
   onUse: (template: ImageToolPromptTemplate) => void
   template: ImageToolPromptTemplate
@@ -7912,7 +7946,15 @@ function PromptTemplateCard({
       </label>
       <div className="prompt-template-preview">
         {template.previewDataUrl ? (
-          <img alt={template.title} src={template.previewDataUrl} />
+          <button
+            aria-label={`${text.previewImage}: ${template.title}`}
+            className="prompt-template-preview-button"
+            data-preview-label={text.previewImage}
+            onClick={() => onPreviewImage(template)}
+            type="button"
+          >
+            <img alt={template.title} src={template.previewDataUrl} />
+          </button>
         ) : (
           <span>{text.noPreview}</span>
         )}
@@ -10380,6 +10422,81 @@ function ImageLightbox({
     ok: false,
     error: 'missing_image_payload'
   })
+  useEffect(() => {
+    const nextObjectUrl = createPreviewObjectUrl({
+      mimeType: imagePreviewSource.mimeType,
+      source: imagePreviewSource.source,
+      sourceType: imagePreviewSource.sourceType
+    })
+
+    setObjectUrl(nextObjectUrl)
+
+    return () => {
+      if (nextObjectUrl.ok) {
+        nextObjectUrl.revoke?.()
+      }
+    }
+  }, [imagePreviewSource.mimeType, imagePreviewSource.source, imagePreviewSource.sourceType])
+
+  const imageSource = objectUrl.ok ? objectUrl.src : undefined
+
+  return (
+    <ZoomableImageLightbox
+      alt={image?.revisedPrompt || message.prompt || text.imageAlt}
+      imageSource={imageSource}
+      onClose={onClose}
+      subtitle={params ? formatImageMetadata(params, text) : undefined}
+      text={text}
+      title={text.previewImage}
+    >
+      <button className="action-button" disabled={!canDownloadImage} onClick={() => onDownload(message)} type="button">
+        {text.saveImage}
+      </button>
+    </ZoomableImageLightbox>
+  )
+}
+
+function PromptTemplatePreviewLightbox({
+  preview,
+  onClose,
+  text
+}: {
+  preview: PromptTemplatePreviewDialogState
+  onClose: () => void
+  text: (typeof copy)[Language]
+}): React.JSX.Element {
+  return (
+    <ZoomableImageLightbox
+      alt={preview.title || text.effectImage}
+      className="prompt-template-preview-lightbox"
+      imageSource={preview.imageDataUrl}
+      onClose={onClose}
+      subtitle={preview.description}
+      text={text}
+      title={preview.title || text.previewImage}
+    />
+  )
+}
+
+function ZoomableImageLightbox({
+  alt,
+  children,
+  className,
+  imageSource,
+  onClose,
+  subtitle,
+  text,
+  title
+}: {
+  alt: string
+  children?: ReactNode
+  className?: string
+  imageSource?: string
+  onClose: () => void
+  subtitle?: ReactNode
+  text: (typeof copy)[Language]
+  title: string
+}): React.JSX.Element {
   const [scale, setScale] = useState(1)
   const [offset, setOffset] = useState({ x: 0, y: 0 })
   const [isDragging, setIsDragging] = useState(false)
@@ -10450,35 +10567,36 @@ function ImageLightbox({
     })
   }
   useEffect(() => {
-    const nextObjectUrl = createPreviewObjectUrl({
-      mimeType: imagePreviewSource.mimeType,
-      source: imagePreviewSource.source,
-      sourceType: imagePreviewSource.sourceType
-    })
-
-    setObjectUrl(nextObjectUrl)
-    setViewerTransform(1, { x: 0, y: 0 })
-
-    return () => {
-      if (nextObjectUrl.ok) {
-        nextObjectUrl.revoke?.()
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose()
       }
     }
-  }, [imagePreviewSource.mimeType, imagePreviewSource.source, imagePreviewSource.sourceType])
 
-  const imageSource = objectUrl.ok ? objectUrl.src : undefined
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [onClose])
+
+  useEffect(() => {
+    setViewerTransform(1, { x: 0, y: 0 })
+  }, [imageSource])
+
   const imageStyle: ImageViewerImageStyle = {
     transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
     cursor: isDragging ? 'grabbing' : 'grab'
   }
+  const lightboxClassName = className ? `image-lightbox ${className}` : 'image-lightbox'
 
   return (
-    <div className="image-lightbox" onClick={onClose} role="dialog" aria-modal="true">
+    <div className={lightboxClassName} onClick={onClose} role="dialog" aria-modal="true">
       <div className="image-lightbox-panel" onClick={(event) => event.stopPropagation()}>
         <div className="image-lightbox-header">
           <div>
-            <strong>{text.previewImage}</strong>
-            {params && <p>{formatImageMetadata(params, text)}</p>}
+            <strong>{title}</strong>
+            {subtitle && <p>{subtitle}</p>}
           </div>
           <button className="image-lightbox-close" onClick={onClose} type="button">
             x
@@ -10535,7 +10653,7 @@ function ImageLightbox({
         >
           {imageSource ? (
             <img
-              alt={image?.revisedPrompt || message.prompt || text.imageAlt}
+              alt={alt}
               className="image-lightbox-image"
               draggable={false}
               ref={imageRef}
@@ -10562,14 +10680,7 @@ function ImageLightbox({
           <button className="action-button" onClick={setActualSize} type="button">
             {text.actualSize}
           </button>
-          <button
-            className="action-button"
-            disabled={!canDownloadImage}
-            onClick={() => onDownload(message)}
-            type="button"
-          >
-            {text.saveImage}
-          </button>
+          {children}
           <button className="action-button" onClick={onClose} type="button">
             {text.close}
           </button>
