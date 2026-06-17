@@ -3471,6 +3471,7 @@ export function App(): React.JSX.Element {
   const [language, setLanguage] = useState<Language>('zh')
   const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false)
   const [isThemeMenuOpen, setIsThemeMenuOpen] = useState(false)
+  const [isProviderMenuOpen, setIsProviderMenuOpen] = useState(false)
   const [customLogoDataUrl, setCustomLogoDataUrl] = useState(() => readStoredValue(CUSTOM_LOGO_STORAGE_KEY))
   const [isBridgeReady, setIsBridgeReady] = useState(false)
   const [confirmationDialog, setConfirmationDialog] = useState<ConfirmationDialogState>()
@@ -3485,6 +3486,7 @@ export function App(): React.JSX.Element {
   const conversationScrollRef = useRef<HTMLElement | null>(null)
   const languageMenuRef = useRef<HTMLDivElement | null>(null)
   const themeMenuRef = useRef<HTMLDivElement | null>(null)
+  const providerMenuRef = useRef<HTMLDivElement | null>(null)
   const logoFileInputRef = useRef<HTMLInputElement | null>(null)
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null)
   const referenceImageInputRef = useRef<HTMLInputElement | null>(null)
@@ -3617,6 +3619,7 @@ export function App(): React.JSX.Element {
     [currentCopy, currentProviderTemplate]
   )
   const usageTemplates = useMemo(() => getImageProviderTemplates(customProviderTemplates), [customProviderTemplates])
+  const providerMenuTemplates = usageTemplates
   const usageRecordFilters = useMemo(
     () => createUsageRecordFilters(usageFilters, usageTemplates),
     [usageFilters, usageTemplates]
@@ -4244,6 +4247,24 @@ export function App(): React.JSX.Element {
       document.removeEventListener('pointerdown', handlePointerDown)
     }
   }, [isThemeMenuOpen])
+
+  useEffect(() => {
+    if (!isProviderMenuOpen) {
+      return undefined
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!providerMenuRef.current?.contains(event.target as Node)) {
+        setIsProviderMenuOpen(false)
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDown)
+
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown)
+    }
+  }, [isProviderMenuOpen])
 
   useEffect(() => {
     const imageToolApi = getImageToolApi()
@@ -6298,6 +6319,53 @@ export function App(): React.JSX.Element {
     }
   }
 
+  const handleProviderTemplateSwitch = async (templateId: string) => {
+    setIsProviderMenuOpen(false)
+
+    if (templateId === providerTemplateId) {
+      return
+    }
+
+    const imageToolApi = getImageToolApi()
+    const diagnostics = getBridgeDiagnostics()
+    setIsBridgeReady(diagnostics.hasBridge)
+
+    if (!hasImageToolBridge(imageToolApi)) {
+      showToast(currentCopy.missingBridge)
+      return
+    }
+
+    const template = getImageProviderTemplate(templateId, customProviderTemplates)
+    const nextSettings: ImageToolPersistedSettings = {
+      appearanceTheme,
+      providerTemplateId: template.id,
+      baseUrl: template.defaultBaseUrl,
+      endpointPath: template.endpointPath,
+      editEndpointPath: template.editEndpointPath,
+      model: template.model,
+      quality,
+      outputFormat: template.outputFormat ?? outputFormat,
+      sendOutputFormat: template.sendOutputFormat,
+      sendResponseFormat: template.sendResponseFormat,
+      responseFormat: template.responseFormat ?? responseFormat,
+      sizeMode,
+      sizePreset: fixedSize,
+      saveApiKey,
+      providerCredentials,
+      customProviderTemplates,
+      defaultUnitPrice,
+      currency,
+      providerUnitPrices
+    }
+
+    try {
+      const savedSettings = await imageToolApi.saveSettings(nextSettings)
+      applySavedSettings(savedSettings)
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : currentCopy.failed)
+    }
+  }
+
   const updateSettingsDraft = (patch: Partial<ApiSettingsDraft>) => {
     setSettingsDraft((currentDraft) => ({
       ...currentDraft,
@@ -6574,8 +6642,56 @@ export function App(): React.JSX.Element {
       <div className="chat-main">
         <header className="app-header">
           <div className="app-header-spacer" aria-hidden="true" />
-          <div className="header-status" aria-label={currentCopy.currentSettingsLabel}>
-            <span className={`api-status api-status-${apiStatus}`}>{getApiStatusLabel(apiStatus, currentCopy)}</span>
+          <div className="provider-status-menu header-status" ref={providerMenuRef}>
+            <button
+              aria-expanded={isProviderMenuOpen}
+              aria-haspopup="menu"
+              aria-label={currentCopy.currentSettingsLabel}
+              className={`api-status provider-status-trigger api-status-${apiStatus}`}
+              onClick={() => {
+                setIsLanguageMenuOpen(false)
+                setIsThemeMenuOpen(false)
+                setIsProviderMenuOpen((isOpen) => !isOpen)
+              }}
+              title={currentProviderTemplateLabel}
+              type="button"
+            >
+              <span className="provider-status-dot" aria-hidden="true" />
+              <span className="provider-status-main">{getApiStatusLabel(apiStatus, currentCopy)}</span>
+              <span className="provider-status-divider" aria-hidden="true" />
+              <span className="provider-status-name">{currentProviderTemplateLabel}</span>
+              <span className="provider-chevron" aria-hidden="true" />
+            </button>
+            {isProviderMenuOpen && (
+              <div className="provider-menu-panel" role="menu" aria-label={currentCopy.providerTemplate}>
+                {providerMenuTemplates.map((providerTemplate) => {
+                  const providerLabel = getProviderTemplateLabel(providerTemplate, currentCopy)
+                  const providerApiKey = getProviderCredentialApiKey(providerCredentials, providerTemplate.id)
+                  const isCurrentProvider = providerTemplate.id === providerTemplateId
+
+                  return (
+                    <button
+                      aria-checked={isCurrentProvider}
+                      key={providerTemplate.id}
+                      onClick={() => void handleProviderTemplateSwitch(providerTemplate.id)}
+                      role="menuitemradio"
+                      type="button"
+                    >
+                      <span className="provider-menu-copy">
+                        <strong>{providerLabel.name}</strong>
+                        <small>
+                          {providerApiKey.trim() ? currentCopy.apiConfigured : currentCopy.apiNotConfigured}
+                        </small>
+                      </span>
+                      <span
+                        className={isCurrentProvider ? 'provider-check is-visible' : 'provider-check'}
+                        aria-hidden="true"
+                      />
+                    </button>
+                  )
+                })}
+              </div>
+            )}
           </div>
           <div className="theme-menu" ref={themeMenuRef}>
             <button
@@ -6585,6 +6701,7 @@ export function App(): React.JSX.Element {
               className="theme-menu-trigger"
               onClick={() => {
                 setIsLanguageMenuOpen(false)
+                setIsProviderMenuOpen(false)
                 setIsThemeMenuOpen((isOpen) => !isOpen)
               }}
               type="button"
@@ -6621,6 +6738,7 @@ export function App(): React.JSX.Element {
               aria-haspopup="menu"
               className="language-menu-trigger"
               onClick={() => {
+                setIsProviderMenuOpen(false)
                 setIsThemeMenuOpen(false)
                 setIsLanguageMenuOpen((isOpen) => !isOpen)
               }}
@@ -7237,29 +7355,74 @@ function ConversationSidebar({
   const ungroupedConversations = conversations.filter((conversation) => conversation.projectId === null)
   const projectEntries: Array<{
     conversations: ImageToolConversation[]
-    id: string | null
+    id: string
     key: string
     label: string
-    project?: ImageToolProjectGroup
-  }> = [
-    ...projects.map((project) => ({
-      conversations: conversations.filter((conversation) => conversation.projectId === project.id),
-      id: project.id,
-      key: project.id,
-      label: project.name,
-      project
-    })),
-    ...(ungroupedConversations.length > 0
-      ? [
-          {
-            conversations: ungroupedConversations,
-            id: null,
-            key: UNGROUPED_PROJECT_KEY,
-            label: text.ungroupedProject
-          }
-        ]
-      : [])
-  ]
+    project: ImageToolProjectGroup
+  }> = projects.map((project) => ({
+    conversations: conversations.filter((conversation) => conversation.projectId === project.id),
+    id: project.id,
+    key: project.id,
+    label: project.name,
+    project
+  }))
+  const hasSidebarItems = projectEntries.length > 0 || ungroupedConversations.length > 0
+  const renderConversationRow = (conversation: ImageToolConversation): React.JSX.Element => {
+    const conversationTitle = getConversationDisplayTitle(conversation, text)
+
+    return (
+      <div
+        className={conversation.id === activeConversationId ? 'conversation-row is-active' : 'conversation-row'}
+        key={conversation.id}
+      >
+        <button
+          className="conversation-select-button"
+          onClick={() => onSelectConversation(conversation.id)}
+          title={conversationTitle}
+          type="button"
+        >
+          <span className="conversation-title-line">
+            <span className="conversation-card-icon" aria-hidden="true" />
+            <span>{conversationTitle}</span>
+          </span>
+          <small>
+            {formatConversationTime(conversation.lastMessageAt ?? conversation.updatedAt, language)}
+            {conversation.imageCount ? ` · ${conversation.imageCount}` : ''}
+          </small>
+        </button>
+        <details className="conversation-menu">
+          <summary aria-label={text.moreActions}>...</summary>
+          <div className="conversation-menu-panel">
+            <label>
+              <span>{text.moveToProject}</span>
+              <select
+                onChange={(event) =>
+                  onMoveConversation(
+                    conversation.id,
+                    event.currentTarget.value === UNGROUPED_PROJECT_KEY ? null : event.currentTarget.value
+                  )
+                }
+                value={conversation.projectId ?? UNGROUPED_PROJECT_KEY}
+              >
+                <option value={UNGROUPED_PROJECT_KEY}>{text.ungroupedProject}</option>
+                {projects.map((projectOption) => (
+                  <option key={projectOption.id} value={projectOption.id}>
+                    {projectOption.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button onClick={() => onRenameConversation(conversation)} type="button">
+              {text.rename}
+            </button>
+            <button className="danger-menu-item" onClick={() => onDeleteConversation(conversation.id)} type="button">
+              {text.delete}
+            </button>
+          </div>
+        </details>
+      </div>
+    )
+  }
 
   return (
     <aside className="conversation-sidebar" aria-label={text.conversationLabel}>
@@ -7310,177 +7473,119 @@ function ConversationSidebar({
         </div>
       </div>
       <div className="project-list">
-        {projectEntries.length === 0 ? (
+        {!hasSidebarItems ? (
           <div className="sidebar-empty-state">
             <strong>{text.noProjectsYet}</strong>
             <span>{text.noProjectsHint}</span>
           </div>
         ) : (
-          projectEntries.map((entry) => {
-            const project = entry.project
-            const projectConversations = entry.conversations
-            const projectLabel = entry.label
-            const isProjectCollapsed = collapsedProjectIds.has(entry.key)
-            const isProjectSelected = selectedProjectId === entry.id
-            const sectionClassName = [
-              'project-section',
-              isProjectSelected ? 'is-selected' : '',
-              isProjectCollapsed ? 'is-collapsed' : ''
-            ]
-              .filter(Boolean)
-              .join(' ')
+          <>
+            {ungroupedConversations.length > 0 && (
+              <div className="conversation-list conversation-list-ungrouped">
+                {ungroupedConversations.map(renderConversationRow)}
+              </div>
+            )}
+            {projectEntries.map((entry) => {
+              const project = entry.project
+              const projectConversations = entry.conversations
+              const projectLabel = entry.label
+              const isProjectCollapsed = collapsedProjectIds.has(entry.key)
+              const isProjectSelected = selectedProjectId === entry.id
+              const sectionClassName = [
+                'project-section',
+                isProjectSelected ? 'is-selected' : '',
+                isProjectCollapsed ? 'is-collapsed' : ''
+              ]
+                .filter(Boolean)
+                .join(' ')
 
-            return (
-              <section className={sectionClassName} key={entry.key}>
-                <div className="project-header">
-                  <button
-                    aria-expanded={!isProjectCollapsed}
-                    aria-label={isProjectCollapsed ? text.expandProject : text.collapseProject}
-                    className="project-collapse-button"
-                    onClick={() => onToggleProjectCollapse(entry.key)}
-                    type="button"
-                  >
-                    <span
-                      className={isProjectCollapsed ? 'section-chevron is-collapsed' : 'section-chevron'}
-                      aria-hidden="true"
-                    />
-                  </button>
-                  {project && renamingProjectId === project.id ? (
-                    <form
-                      className="project-rename-form"
-                      onSubmit={(event) => {
-                        event.preventDefault()
-                        onCommitProjectRename(project.id)
-                      }}
-                    >
-                      <input
-                        aria-label={text.projectNamePrompt}
-                        autoFocus
-                        onBlur={() => onCommitProjectRename(project.id)}
-                        onChange={(event) => onProjectRenameDraftChange(event.currentTarget.value)}
-                        onFocus={(event) => event.currentTarget.select()}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Escape') {
-                            event.preventDefault()
-                            onCancelProjectRename()
-                          }
-                        }}
-                        value={projectRenameDraft}
-                      />
-                    </form>
-                  ) : (
+              return (
+                <section className={sectionClassName} key={entry.key}>
+                  <div className="project-header">
                     <button
-                      aria-pressed={isProjectSelected}
-                      className="project-title-button"
-                      onClick={() => onSelectProject(entry.id)}
-                      title={projectLabel}
+                      aria-expanded={!isProjectCollapsed}
+                      aria-label={isProjectCollapsed ? text.expandProject : text.collapseProject}
+                      className="project-collapse-button"
+                      onClick={() => onToggleProjectCollapse(entry.key)}
                       type="button"
                     >
-                      <span className="project-title-content">
-                        <span className="project-title-line">
-                          <span className="project-folder-icon" aria-hidden="true" />
-                          <span>{projectLabel}</span>
-                        </span>
-                        <small>{formatProjectConversationCount(projectConversations.length, text)}</small>
-                      </span>
+                      <span
+                        className={isProjectCollapsed ? 'section-chevron is-collapsed' : 'section-chevron'}
+                        aria-hidden="true"
+                      />
                     </button>
-                  )}
-                  {project && renamingProjectId !== project.id && (
-                    <details className="project-menu">
-                      <summary aria-label={text.moreActions}>...</summary>
-                      <div className="conversation-menu-panel project-menu-panel">
-                        <button aria-label={text.rename} onClick={() => onRenameProject(project)} type="button">
-                          {text.rename}
-                        </button>
-                        <button
-                          aria-label={text.delete}
-                          className="danger-menu-item"
-                          onClick={() => onDeleteProject(project)}
-                          type="button"
-                        >
-                          {text.delete}
-                        </button>
-                      </div>
-                    </details>
-                  )}
-                </div>
-                {!isProjectCollapsed && (
-                  <div className="conversation-list">
-                    {projectConversations.length === 0 ? (
-                      <p className="sidebar-empty">{text.noChats}</p>
-                    ) : (
-                      projectConversations.map((conversation) => {
-                        const conversationTitle = getConversationDisplayTitle(conversation, text)
-
-                        return (
-                          <div
-                            className={
-                              conversation.id === activeConversationId
-                                ? 'conversation-row is-active'
-                                : 'conversation-row'
+                    {project && renamingProjectId === project.id ? (
+                      <form
+                        className="project-rename-form"
+                        onSubmit={(event) => {
+                          event.preventDefault()
+                          onCommitProjectRename(project.id)
+                        }}
+                      >
+                        <input
+                          aria-label={text.projectNamePrompt}
+                          autoFocus
+                          onBlur={() => onCommitProjectRename(project.id)}
+                          onChange={(event) => onProjectRenameDraftChange(event.currentTarget.value)}
+                          onFocus={(event) => event.currentTarget.select()}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Escape') {
+                              event.preventDefault()
+                              onCancelProjectRename()
                             }
-                            key={conversation.id}
+                          }}
+                          value={projectRenameDraft}
+                        />
+                      </form>
+                    ) : (
+                      <button
+                        aria-pressed={isProjectSelected}
+                        className="project-title-button"
+                        onClick={() => onSelectProject(entry.id)}
+                        title={projectLabel}
+                        type="button"
+                      >
+                        <span className="project-title-content">
+                          <span className="project-title-line">
+                            <span className="project-folder-icon" aria-hidden="true" />
+                            <span>{projectLabel}</span>
+                          </span>
+                          <small>{formatProjectConversationCount(projectConversations.length, text)}</small>
+                        </span>
+                      </button>
+                    )}
+                    {project && renamingProjectId !== project.id && (
+                      <details className="project-menu">
+                        <summary aria-label={text.moreActions}>...</summary>
+                        <div className="conversation-menu-panel project-menu-panel">
+                          <button aria-label={text.rename} onClick={() => onRenameProject(project)} type="button">
+                            {text.rename}
+                          </button>
+                          <button
+                            aria-label={text.delete}
+                            className="danger-menu-item"
+                            onClick={() => onDeleteProject(project)}
+                            type="button"
                           >
-                            <button
-                              className="conversation-select-button"
-                              onClick={() => onSelectConversation(conversation.id)}
-                              title={conversationTitle}
-                              type="button"
-                            >
-                              <span className="conversation-title-line">
-                                <span className="conversation-card-icon" aria-hidden="true" />
-                                <span>{conversationTitle}</span>
-                              </span>
-                              <small>
-                                {formatConversationTime(conversation.lastMessageAt ?? conversation.updatedAt, language)}
-                                {conversation.imageCount ? ` · ${conversation.imageCount}` : ''}
-                              </small>
-                            </button>
-                            <details className="conversation-menu">
-                              <summary aria-label={text.moreActions}>...</summary>
-                              <div className="conversation-menu-panel">
-                                <label>
-                                  <span>{text.moveToProject}</span>
-                                  <select
-                                    onChange={(event) =>
-                                      onMoveConversation(
-                                        conversation.id,
-                                        event.currentTarget.value === UNGROUPED_PROJECT_KEY
-                                          ? null
-                                          : event.currentTarget.value
-                                      )
-                                    }
-                                    value={conversation.projectId ?? UNGROUPED_PROJECT_KEY}
-                                  >
-                                    <option value={UNGROUPED_PROJECT_KEY}>{text.ungroupedProject}</option>
-                                    {projects.map((projectOption) => (
-                                      <option key={projectOption.id} value={projectOption.id}>
-                                        {projectOption.name}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <button onClick={() => onRenameConversation(conversation)} type="button">
-                                  {text.rename}
-                                </button>
-                                <button
-                                  className="danger-menu-item"
-                                  onClick={() => onDeleteConversation(conversation.id)}
-                                  type="button"
-                                >
-                                  {text.delete}
-                                </button>
-                              </div>
-                            </details>
-                          </div>
-                        )
-                      })
+                            {text.delete}
+                          </button>
+                        </div>
+                      </details>
                     )}
                   </div>
-                )}
-              </section>
-            )
-          })
+                  {!isProjectCollapsed && (
+                    <div className="conversation-list">
+                      {projectConversations.length === 0 ? (
+                        <p className="sidebar-empty">{text.noChats}</p>
+                      ) : (
+                        projectConversations.map(renderConversationRow)
+                      )}
+                    </div>
+                  )}
+                </section>
+              )
+            })}
+          </>
         )}
       </div>
       <button className="trash-button" onClick={onTasksUsageOpen} title={text.tasksUsage} type="button">
