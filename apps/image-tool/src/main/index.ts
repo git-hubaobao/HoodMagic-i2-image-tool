@@ -160,6 +160,10 @@ type MaterializedImage = {
   previewDataUrl: string
 }
 
+type MaterializedTaskImage = MaterializedImage & {
+  historyId: string
+}
+
 type Image2AdapterFormatOptions = {
   outputFormat?: ImageToolImage2OutputFormat
   responseFormat?: ImageToolImage2ResponseFormat
@@ -1916,6 +1920,74 @@ const materializeGeneratedImage = async ({
   }
 }
 
+const materializeGeneratedImages = async ({
+  images,
+  createdAt,
+  taskId,
+  model,
+  size,
+  outputFormat
+}: {
+  images: ImageToolGeneratedImage[]
+  createdAt: number
+  taskId: string
+  model: string
+  size: string
+  outputFormat?: string
+}): Promise<MaterializedTaskImage[]> => {
+  const materializedImages: MaterializedTaskImage[] = []
+
+  for (const image of images) {
+    materializedImages.push({
+      ...(await materializeGeneratedImage({
+        image,
+        createdAt,
+        taskId,
+        model,
+        size,
+        outputFormat
+      })),
+      historyId: createHistoryId()
+    })
+  }
+
+  return materializedImages
+}
+
+const createMaterializedTaskResult = ({
+  materializedImages,
+  request,
+  requestSummary,
+  sourceImages
+}: {
+  materializedImages: MaterializedTaskImage[]
+  request: ImageToolImageGenerationResult['request']
+  requestSummary?: Record<string, unknown>
+  sourceImages: ImageToolGeneratedImage[]
+}): ImageToolImageGenerationResult => {
+  const firstImage = materializedImages[0]
+
+  return {
+    images: materializedImages.map((materializedImage, index) => ({
+      ...(sourceImages[index] ?? {}),
+      previewDataUrl: materializedImage.previewDataUrl,
+      historyId: materializedImage.historyId,
+      imageMimeType: materializedImage.imageMimeType,
+      imageFileName: materializedImage.imageFileName
+    })),
+    request,
+    ...(firstImage
+      ? {
+          historyId: firstImage.historyId,
+          previewDataUrl: firstImage.previewDataUrl,
+          imageMimeType: firstImage.imageMimeType,
+          imageFileName: firstImage.imageFileName
+        }
+      : {}),
+    ...(requestSummary ? { requestSummary } : {})
+  }
+}
+
 const persistSucceededTaskHistory = async ({
   mode = 'image_generation',
   referenceImages,
@@ -1934,12 +2006,16 @@ const persistSucceededTaskHistory = async ({
   request: ImageToolGenerateImage2Request | ImageToolEditImage2Request
 }): Promise<void> => {
   const now = Date.now()
-  const historyId = result.historyId ?? createHistoryId()
   const data = await readImageToolData()
   const writable = resolveWritableConversationData(data, request.conversationId ?? task.request.conversationId)
+  let nextData = writable.data
 
-  await writeImageToolData(
-    addImageHistoryItem(writable.data, {
+  result.images.forEach((image, index) => {
+    const historyId = image.historyId ?? (index === 0 ? result.historyId : undefined) ?? createHistoryId()
+    const imageFileName = image.imageFileName ?? (index === 0 ? result.imageFileName : undefined)
+    const imageMimeType = image.imageMimeType ?? (index === 0 ? result.imageMimeType : undefined)
+
+    nextData = addImageHistoryItem(nextData, {
       id: historyId,
       conversationId: writable.conversationId,
       taskId: task.id,
@@ -1949,14 +2025,16 @@ const persistSucceededTaskHistory = async ({
       size: task.request.size,
       quality: task.request.quality ?? request.quality,
       outputFormat: result.request.outputFormat ?? request.outputFormat ?? 'png',
-      ...(result.imageFileName ? { imagePath: join(getImageToolImagesDir(), result.imageFileName) } : {}),
-      ...(result.imageMimeType ? { imageMimeType: result.imageMimeType } : {}),
-      ...(result.imageFileName ? { imageFileName: result.imageFileName } : {}),
+      ...(imageFileName ? { imagePath: join(getImageToolImagesDir(), imageFileName) } : {}),
+      ...(imageMimeType ? { imageMimeType } : {}),
+      ...(imageFileName ? { imageFileName } : {}),
       ...(referenceImages && referenceImages.length > 0 ? { referenceImages } : {}),
       createdAt: task.finishedAt ?? now,
       updatedAt: task.finishedAt ?? now
     })
-  )
+  })
+
+  await writeImageToolData(nextData)
 }
 
 const executeImageTask = async (taskId: string, request: ImageToolGenerateImage2Request): Promise<void> => {
@@ -1980,32 +2058,24 @@ const executeImageTask = async (taskId: string, request: ImageToolGenerateImage2
       prompt: request.prompt.trim(),
       size: request.size,
       quality: request.quality ?? 'auto',
+      n: request.n ?? 1,
       outputFormat: getAdapterOutputFormat(request),
       responseFormat: getAdapterResponseFormat(request)
     })
-    const historyId = createHistoryId()
     const createdAt = Date.now()
-    const materializedImage = await materializeGeneratedImage({
-      image: result.images[0],
+    const materializedImages = await materializeGeneratedImages({
+      images: result.images,
       createdAt,
       taskId: runningTask.id,
       model: result.request.model,
       size: result.request.size,
       outputFormat: result.request.outputFormat ?? request.outputFormat ?? 'png'
     })
-    const taskResult: ImageToolImageGenerationResult = {
-      images: [
-        {
-          ...result.images[0],
-          previewDataUrl: materializedImage.previewDataUrl
-        }
-      ],
+    const taskResult = createMaterializedTaskResult({
+      materializedImages,
       request: result.request,
-      historyId,
-      previewDataUrl: materializedImage.previewDataUrl,
-      imageMimeType: materializedImage.imageMimeType,
-      imageFileName: materializedImage.imageFileName
-    }
+      sourceImages: result.images
+    })
     const succeededTask: ImageToolImageTask = {
       ...markTaskSucceeded(runningTask, taskResult),
       result: taskResult
@@ -2086,30 +2156,21 @@ const executeImageEditTask = async (taskId: string, request: ImageToolEditImage2
       submittedMaskWidth: request.submittedMaskWidth,
       submittedMaskHeight: request.submittedMaskHeight
     })
-    const historyId = createHistoryId()
     const createdAt = Date.now()
-    const materializedImage = await materializeGeneratedImage({
-      image: result.images[0],
+    const materializedImages = await materializeGeneratedImages({
+      images: result.images,
       createdAt,
       taskId: runningTask.id,
       model: result.request.model,
       size: result.request.size,
       outputFormat: result.request.outputFormat ?? request.outputFormat ?? 'png'
     })
-    const taskResult: ImageToolImageGenerationResult = {
-      images: [
-        {
-          ...result.images[0],
-          previewDataUrl: materializedImage.previewDataUrl
-        }
-      ],
+    const taskResult = createMaterializedTaskResult({
+      materializedImages,
       request: result.request,
-      historyId,
-      previewDataUrl: materializedImage.previewDataUrl,
-      imageMimeType: materializedImage.imageMimeType,
-      imageFileName: materializedImage.imageFileName,
-      requestSummary: result.requestSummary ?? requestSummary
-    }
+      requestSummary: result.requestSummary ?? requestSummary,
+      sourceImages: result.images
+    })
     const succeededTask: ImageToolImageTask = {
       ...markTaskSucceeded(runningTask, taskResult),
       result: taskResult
@@ -2181,76 +2242,44 @@ const registerImageToolIpc = (): void => {
           prompt: request.prompt.trim(),
           size: request.size,
           quality: request.quality ?? 'auto',
+          n: request.n ?? 1,
           outputFormat: getAdapterOutputFormat(request),
           responseFormat: getAdapterResponseFormat(request)
         })
-        const historyId = createHistoryId()
         const createdAt = Date.now()
-        const materializedImage = await materializeGeneratedImage({
-          image: result.images[0],
+        const materializedImages = await materializeGeneratedImages({
+          images: result.images,
           createdAt,
-          taskId: historyId,
+          taskId: runningTask.id,
           model: result.request.model,
           size: result.request.size,
           outputFormat: result.request.outputFormat ?? request.outputFormat ?? 'png'
         })
-        const data = await readImageToolData()
-        const writable = resolveWritableConversationData(data, request.conversationId)
-
-        await writeImageToolData(
-          addImageHistoryItem(writable.data, {
-            id: historyId,
-            conversationId: writable.conversationId,
-            taskId: historyId,
-            mode: 'image_generation',
-            prompt: request.prompt.trim(),
-            model: result.request.model,
-            size: result.request.size,
-            quality: result.request.quality ?? request.quality,
-            outputFormat: result.request.outputFormat ?? request.outputFormat ?? 'png',
-            ...(materializedImage.imageFileName
-              ? { imagePath: join(getImageToolImagesDir(), materializedImage.imageFileName) }
-              : {}),
-            imageMimeType: materializedImage.imageMimeType,
-            imageFileName: materializedImage.imageFileName,
-            createdAt,
-            updatedAt: createdAt
-          })
-        )
-
-        const taskResult: ImageToolImageGenerationResult = {
-          images: [
-            {
-              ...result.images[0],
-              previewDataUrl: materializedImage.previewDataUrl
-            }
-          ],
+        const taskResult = createMaterializedTaskResult({
+          materializedImages,
           request: result.request,
-          historyId,
-          previewDataUrl: materializedImage.previewDataUrl,
-          imageMimeType: materializedImage.imageMimeType,
-          imageFileName: materializedImage.imageFileName
-        }
+          sourceImages: result.images
+        })
         const succeededTask: ImageToolImageTask = {
           ...markTaskSucceeded(runningTask, taskResult),
           result: taskResult
         }
 
+        await persistSucceededTaskHistory({
+          task: succeededTask,
+          result: taskResult,
+          request
+        })
         await markTaskUsageSucceeded(succeededTask, result.images.length)
 
         return {
           ok: true,
-          images: [
-            {
-              ...result.images[0],
-              previewDataUrl: materializedImage.previewDataUrl
-            }
-          ],
+          images: taskResult.images,
           request: result.request,
-          historyId,
-          previewDataUrl: materializedImage.previewDataUrl,
-          imageMimeType: materializedImage.imageMimeType,
-          imageFileName: materializedImage.imageFileName
+          historyId: taskResult.historyId,
+          previewDataUrl: taskResult.previewDataUrl,
+          imageMimeType: taskResult.imageMimeType,
+          imageFileName: taskResult.imageFileName
         }
       } catch (error) {
         if (error instanceof Image2AdapterError) {
@@ -2436,6 +2465,7 @@ const registerImageToolIpc = (): void => {
         endpointPath: normalizeEndpointPath(request.endpointPath),
         model: request.model.trim(),
         prompt: request.prompt.trim(),
+        n: request.n ?? 1,
         sendOutputFormat: Boolean(request.sendOutputFormat),
         sendResponseFormat: Boolean(request.sendResponseFormat)
       }

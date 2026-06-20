@@ -12,6 +12,7 @@ export type ImageToolSettings = {
   model: string
   quality: 'auto' | 'low' | 'medium' | 'high'
   outputFormat: 'png' | 'jpeg' | 'webp'
+  generationImageCount: number
   sendOutputFormat: boolean
   sendResponseFormat: boolean
   responseFormat?: 'url' | 'b64_json'
@@ -360,6 +361,16 @@ const positiveIntegerOrDefault = (value: unknown, fallback: number): number => {
   return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : fallback
 }
 
+const boundedIntegerOrDefault = (value: unknown, fallback: number, min: number, max: number): number => {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value.trim()) : Number.NaN
+
+  if (!Number.isInteger(number)) {
+    return fallback
+  }
+
+  return Math.min(max, Math.max(min, number))
+}
+
 const createStorageId = (prefix: string): string => {
   const globalCrypto = globalThis.crypto
 
@@ -478,6 +489,7 @@ export const createDefaultImageToolSettings = (): ImageToolSettings => ({
   model: compatibleImageProviderTemplate.model,
   quality: 'auto',
   outputFormat: 'png',
+  generationImageCount: 1,
   sendOutputFormat: compatibleImageProviderTemplate.sendOutputFormat,
   sendResponseFormat: compatibleImageProviderTemplate.sendResponseFormat,
   responseFormat: 'b64_json',
@@ -995,6 +1007,7 @@ const sanitizeSettings = (settings: unknown): ImageToolSettings => {
     outputFormat: outputFormatValues.has(outputFormat as ImageToolSettings['outputFormat'])
       ? (outputFormat as ImageToolSettings['outputFormat'])
       : defaults.outputFormat,
+    generationImageCount: boundedIntegerOrDefault(settings.generationImageCount, defaults.generationImageCount, 1, 10),
     sendOutputFormat,
     sendResponseFormat,
     responseFormat: responseFormatValues.has(responseFormat as NonNullable<ImageToolSettings['responseFormat']>)

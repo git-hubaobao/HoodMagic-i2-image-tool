@@ -189,6 +189,9 @@ export type ImageToolGeneratedImage = {
   b64Json?: string
   url?: string
   previewDataUrl?: string
+  historyId?: string
+  imageMimeType?: string
+  imageFileName?: string
   revisedPrompt?: string
   width?: number
   height?: number

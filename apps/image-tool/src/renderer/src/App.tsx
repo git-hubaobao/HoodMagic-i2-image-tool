@@ -31,6 +31,7 @@ import type {
   ImageToolEditMaskSemantic,
   ImageToolEditSubmitMetadata,
   ImageToolEditSubmitMode,
+  ImageToolGeneratedImage,
   ImageToolGenerateImage2Request,
   ImageToolGenerateImage2Result,
   ImageToolHistoryItem,
@@ -227,7 +228,7 @@ type ImageViewerImageStyle = CSSProperties & {
   cursor?: string
 }
 
-type ComposerPopoverKey = 'size' | 'quality' | 'format'
+type ComposerPopoverKey = 'size' | 'quality' | 'format' | 'count'
 
 type ReferenceImageDraft = ImageToolReferenceImage
 
@@ -744,6 +745,8 @@ const enCopy = {
   size4kLandscape: '4K landscape 3840x2160',
   size4kPortrait: '4K portrait 2160x3840',
   generationParameters: 'Generation parameters',
+  generationImageCount: 'Images',
+  generationImageCountUnit: 'images',
   imageAlt: 'Generated image',
   imageDataMissing: 'Image data is missing.',
   imagePreviewFailed: 'Image preview failed to load.',
@@ -1127,6 +1130,8 @@ const zhCopy: CopyText = {
   size4kLandscape: '4K 横图 3840x2160',
   size4kPortrait: '4K 竖图 2160x3840',
   generationParameters: '生成参数',
+  generationImageCount: '生成张数',
+  generationImageCountUnit: '张',
   imageAlt: '生成图片',
   imageDataMissing: '图片数据缺失。',
   imagePreviewFailed: '图片预览加载失败。',
@@ -1286,6 +1291,7 @@ const composerQualityOptions: readonly ImageToolImage2Quality[] = ['low', 'mediu
 
 const outputFormatOptions: readonly ImageToolImage2OutputFormat[] = ['png', 'jpeg', 'webp']
 const responseFormatOptions: readonly ImageToolImage2ResponseFormat[] = ['url', 'b64_json']
+const generationImageCountOptions = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const
 
 const MAX_MASK_IMAGE_BYTES = 4 * 1024 * 1024
 const MAX_REFERENCE_IMAGES = 15
@@ -1320,6 +1326,14 @@ const isComposerQuality = (value: string): value is ImageToolImage2Quality => {
 
 const isComposerOutputFormat = (value: string): value is ImageToolImage2OutputFormat => {
   return outputFormatOptions.includes(value as ImageToolImage2OutputFormat)
+}
+
+const isGenerationImageCount = (value: unknown): value is number => {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    generationImageCountOptions.includes(value as (typeof generationImageCountOptions)[number])
+  )
 }
 
 const templateRecommendedQualityOptions = [
@@ -2142,8 +2156,11 @@ const getImagePreviewMimeType = (previewSource: ImagePreviewSource): ImageMimeTy
 const formatImageMetadata = (params: ConversationParams, text: (typeof copy)[Language]): string => {
   const modeLabel = params.mode ? getComposerModeLabel(params.mode, text) : undefined
   const displaySize = params.size === 'auto' ? params.size : params.size.replace(/x/i, '×')
+  const imageCount = params.n && params.n > 1 ? `${params.n} ${text.generationImageCountUnit}` : undefined
 
-  return [modeLabel, params.model, displaySize, params.quality, params.outputFormat].filter(Boolean).join(' · ')
+  return [modeLabel, params.model, displaySize, params.quality, params.outputFormat, imageCount]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 const getImageEditingFileName = (
@@ -3391,6 +3408,7 @@ export function App(): React.JSX.Element {
   const [fixedSize, setFixedSize] = useState<ImageSizePreset>('3840x2160')
   const [quality, setQuality] = useState<ImageToolImage2Quality>('auto')
   const [outputFormat, setOutputFormat] = useState<ImageToolImage2OutputFormat>('png')
+  const [generationImageCount, setGenerationImageCount] = useState(1)
   const [sendOutputFormat, setSendOutputFormat] = useState(true)
   const [sendResponseFormat, setSendResponseFormat] = useState(false)
   const [responseFormat, setResponseFormat] = useState<ImageToolImage2ResponseFormat>('b64_json')
@@ -4133,6 +4151,7 @@ export function App(): React.JSX.Element {
       setModel(settings.model)
       setQuality(settings.quality)
       setOutputFormat(settings.outputFormat)
+      setGenerationImageCount(settings.generationImageCount)
       setSendOutputFormat(settings.sendOutputFormat)
       setSendResponseFormat(settings.sendResponseFormat)
       setResponseFormat(settings.responseFormat ?? 'b64_json')
@@ -4350,12 +4369,17 @@ export function App(): React.JSX.Element {
                 result: nextMessage.result?.ok
                   ? {
                       ...nextMessage.result,
-                      images: [
-                        {
-                          ...nextMessage.result.images[0],
-                          previewDataUrl: historyItem.imageDataUrl
-                        }
-                      ],
+                      images: nextMessage.result.images.map((image, index) =>
+                        index === 0
+                          ? {
+                              ...image,
+                              previewDataUrl: historyItem.imageDataUrl,
+                              historyId: historyItem.id,
+                              imageMimeType: historyItem.imageMimeType,
+                              imageFileName: historyItem.imageFileName
+                            }
+                          : image
+                      ),
                       historyId: historyItem.id,
                       previewDataUrl: historyItem.imageDataUrl,
                       imageMimeType: historyItem.imageMimeType,
@@ -4486,6 +4510,16 @@ export function App(): React.JSX.Element {
       }
     }
 
+    if (!isGenerationImageCount(params.n ?? 1)) {
+      return {
+        ok: false,
+        message: toValidationErrorMessage(
+          { code: 'invalid_image_count', message: currentCopy.generationImageCount },
+          language
+        )
+      }
+    }
+
     return { ok: true }
   }
 
@@ -4519,7 +4553,7 @@ export function App(): React.JSX.Element {
       size: paramsOverride?.size ?? (resolvedSize.ok ? resolvedSize.value.size : ''),
       quality: paramsOverride?.quality ?? quality,
       outputFormat: paramsOverride?.outputFormat ?? outputFormat,
-      n: paramsOverride?.n ?? 1
+      n: paramsOverride?.n ?? generationImageCount
     }
 
     if (!trimmedPrompt) {
@@ -4645,6 +4679,7 @@ export function App(): React.JSX.Element {
           size: resolvedParams.size,
           quality: resolvedParams.quality,
           outputFormat: resolvedParams.outputFormat,
+          n: resolvedParams.n,
           sendOutputFormat,
           sendResponseFormat,
           responseFormat
@@ -4672,7 +4707,7 @@ export function App(): React.JSX.Element {
         sendOutputFormat,
         sendResponseFormat,
         responseFormat,
-        n: 1,
+        n: resolvedParams.n,
         editMode: effectiveMode === 'image_reference' ? 'reference' : 'masked_edit',
         images: currentReferenceImages.map((image) => ({
           ...image,
@@ -4965,7 +5000,7 @@ export function App(): React.JSX.Element {
         size: preparedAssets.requestSize,
         quality: editSubmitMode === 'compatible' ? 'low' : quality,
         outputFormat,
-        n: 1
+        n: generationImageCount
       },
       [preparedAssets.sourceReferenceImage],
       preparedAssets.maskReferenceImage,
@@ -5176,6 +5211,11 @@ export function App(): React.JSX.Element {
 
   const handleComposerOutputFormatChange = (nextOutputFormat: ImageToolImage2OutputFormat) => {
     setOutputFormat(nextOutputFormat)
+    setComposerPopover(undefined)
+  }
+
+  const handleComposerImageCountChange = (nextImageCount: number) => {
+    setGenerationImageCount(nextImageCount)
     setComposerPopover(undefined)
   }
 
@@ -5395,7 +5435,41 @@ export function App(): React.JSX.Element {
 
     await imageToolApi.deleteHistoryItem(message.historyId)
     updateConversationMessages(message.conversationId ?? activeConversationIdRef.current, (currentMessages) =>
-      currentMessages.filter((currentMessage) => currentMessage.historyId !== message.historyId)
+      currentMessages.flatMap((currentMessage) => {
+        if (!currentMessage.result?.ok) {
+          return currentMessage.historyId === message.historyId ? [] : [currentMessage]
+        }
+
+        const hasImageScopedHistory = currentMessage.result.images.some((image) => image.historyId)
+        const nextImages = currentMessage.result.images.filter((image) => image.historyId !== message.historyId)
+
+        if (nextImages.length === currentMessage.result.images.length) {
+          return currentMessage.historyId === message.historyId && !hasImageScopedHistory ? [] : [currentMessage]
+        }
+
+        if (nextImages.length === 0) {
+          return []
+        }
+
+        const firstImage = nextImages[0]
+
+        return [
+          {
+            ...currentMessage,
+            historyId: firstImage.historyId ?? currentMessage.historyId,
+            imageDataUrl: firstImage.previewDataUrl ?? currentMessage.imageDataUrl,
+            imageFileName: firstImage.imageFileName ?? currentMessage.imageFileName,
+            result: {
+              ...currentMessage.result,
+              images: nextImages,
+              historyId: firstImage.historyId ?? currentMessage.result.historyId,
+              previewDataUrl: firstImage.previewDataUrl ?? currentMessage.result.previewDataUrl,
+              imageMimeType: firstImage.imageMimeType ?? currentMessage.result.imageMimeType,
+              imageFileName: firstImage.imageFileName ?? currentMessage.result.imageFileName
+            }
+          }
+        ]
+      })
     )
     void imageToolApi.getSessionState().then(applySessionState)
   }
@@ -6106,6 +6180,7 @@ export function App(): React.JSX.Element {
     setModel(savedSettings.model)
     setQuality(savedSettings.quality)
     setOutputFormat(savedSettings.outputFormat)
+    setGenerationImageCount(savedSettings.generationImageCount)
     setSendOutputFormat(savedSettings.sendOutputFormat)
     setSendResponseFormat(savedSettings.sendResponseFormat)
     setResponseFormat(savedSettings.responseFormat ?? 'b64_json')
@@ -6279,6 +6354,7 @@ export function App(): React.JSX.Element {
     model,
     quality,
     outputFormat,
+    generationImageCount,
     sendOutputFormat,
     sendResponseFormat,
     responseFormat,
@@ -6345,6 +6421,7 @@ export function App(): React.JSX.Element {
       model: template.model,
       quality,
       outputFormat: template.outputFormat ?? outputFormat,
+      generationImageCount,
       sendOutputFormat: template.sendOutputFormat,
       sendResponseFormat: template.sendResponseFormat,
       responseFormat: template.responseFormat ?? responseFormat,
@@ -6397,6 +6474,7 @@ export function App(): React.JSX.Element {
       model: settingsDraft.model.trim() || 'gpt-image-2',
       quality,
       outputFormat: settingsDraft.outputFormat,
+      generationImageCount,
       sendOutputFormat: settingsDraft.sendOutputFormat,
       sendResponseFormat: settingsDraft.sendResponseFormat,
       responseFormat: settingsDraft.responseFormat,
@@ -7067,6 +7145,14 @@ export function App(): React.JSX.Element {
               >
                 {currentCopy.format}: {outputFormat}
               </button>
+              <button
+                aria-expanded={composerPopover?.key === 'count'}
+                className="composer-chip"
+                onClick={() => toggleComposerPopover('count')}
+                type="button"
+              >
+                {currentCopy.generationImageCount}: {generationImageCount}
+              </button>
               <button className="template-library-button" onClick={openPromptLibrary} type="button">
                 {currentCopy.promptLibrary}
               </button>
@@ -7087,9 +7173,11 @@ export function App(): React.JSX.Element {
               fixedSize={fixedSize}
               language={language}
               onClose={() => setComposerPopover(undefined)}
+              onImageCountChange={handleComposerImageCountChange}
               onOutputFormatChange={handleComposerOutputFormatChange}
               onQualityChange={handleComposerQualityChange}
               onSizeChange={handleComposerSizeChange}
+              generationImageCount={generationImageCount}
               outputFormat={outputFormat}
               popover={composerPopover.key}
               quality={quality}
@@ -9343,7 +9431,7 @@ function ParamChips({
     params.size === 'auto' ? params.size : params.size.replace(/x/i, '×'),
     params.quality,
     params.outputFormat,
-    params.n ? `n=${params.n}` : undefined
+    params.n && params.n > 1 ? `${params.n} ${text.generationImageCountUnit}` : undefined
   ]
     .filter(Boolean)
     .join(' · ')
@@ -10089,8 +10177,10 @@ function ImageEditWorkspace({
 
 function ComposerParameterPopover({
   fixedSize,
+  generationImageCount,
   language,
   onClose,
+  onImageCountChange,
   onOutputFormatChange,
   onQualityChange,
   onSizeChange,
@@ -10101,8 +10191,10 @@ function ComposerParameterPopover({
   text
 }: {
   fixedSize: ImageSizePreset
+  generationImageCount: number
   language: Language
   onClose: () => void
+  onImageCountChange: (imageCount: number) => void
   onOutputFormatChange: (outputFormat: ImageToolImage2OutputFormat) => void
   onQualityChange: (quality: ImageToolImage2Quality) => void
   onSizeChange: (size: ImageSizePreset) => void
@@ -10112,10 +10204,19 @@ function ComposerParameterPopover({
   sizeMode: ImageSizeMode
   text: (typeof copy)[Language]
 }): React.JSX.Element {
+  const title =
+    popover === 'size'
+      ? text.size
+      : popover === 'quality'
+        ? text.quality
+        : popover === 'format'
+          ? text.format
+          : text.generationImageCount
+
   return (
     <div className={`composer-popover composer-popover-${popover}`}>
       <div className="composer-popover-header">
-        <strong>{popover === 'size' ? text.size : popover === 'quality' ? text.quality : text.format}</strong>
+        <strong>{title}</strong>
         <button aria-label={text.close} className="popover-close-button" onClick={onClose} type="button">
           x
         </button>
@@ -10161,6 +10262,20 @@ function ComposerParameterPopover({
               className={outputFormat === option ? 'composer-option is-selected' : 'composer-option'}
               key={option}
               onClick={() => onOutputFormatChange(option)}
+              type="button"
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+      )}
+      {popover === 'count' && (
+        <div className="composer-option-row">
+          {generationImageCountOptions.map((option) => (
+            <button
+              className={generationImageCount === option ? 'composer-option is-selected' : 'composer-option'}
+              key={option}
+              onClick={() => onImageCountChange(option)}
               type="button"
             >
               {option}
@@ -10424,6 +10539,32 @@ function ImagePreview({
   )
 }
 
+const createMessageForResultImage = (
+  message: ConversationMessage,
+  image: ImageToolGeneratedImage | undefined,
+  imageIndex: number
+): ConversationMessage => {
+  if (!message.result?.ok || !image) {
+    return message
+  }
+
+  return {
+    ...message,
+    id: imageIndex === 0 ? message.id : `${message.id}:image:${imageIndex}`,
+    historyId: image.historyId ?? (imageIndex === 0 ? message.historyId : undefined),
+    imageDataUrl: image.previewDataUrl ?? (imageIndex === 0 ? message.imageDataUrl : undefined),
+    imageFileName: image.imageFileName ?? (imageIndex === 0 ? message.imageFileName : undefined),
+    result: {
+      ...message.result,
+      images: [image],
+      historyId: image.historyId ?? (imageIndex === 0 ? message.result.historyId : undefined),
+      previewDataUrl: image.previewDataUrl ?? (imageIndex === 0 ? message.result.previewDataUrl : undefined),
+      imageMimeType: image.imageMimeType ?? (imageIndex === 0 ? message.result.imageMimeType : undefined),
+      imageFileName: image.imageFileName ?? (imageIndex === 0 ? message.result.imageFileName : undefined)
+    }
+  }
+}
+
 function ImageResultMessage({
   message,
   text,
@@ -10448,11 +10589,7 @@ function ImageResultMessage({
   onSaveAsTemplate: (message: ConversationMessage) => void
 }): React.JSX.Element {
   const params = message.params
-  const image = message.result?.ok ? message.result.images[0] : undefined
-  const imagePreviewSource = getImagePreviewSource(image, params?.outputFormat, message.imageDataUrl)
-  const canDownloadImage = Boolean(getImageDownloadHref(imagePreviewSource))
-  const canPreviewImage = Boolean(imagePreviewSource.source)
-  const canEditImage = Boolean(getImageEditingDataUrl(imagePreviewSource) || message.historyId)
+  const images = message.result?.ok && message.result.images.length > 0 ? message.result.images : [undefined]
   const editDebugDetails =
     params?.mode === 'image_edit' || params?.mode === 'image_reference'
       ? createSafeEditDebugDetails({
@@ -10462,46 +10599,69 @@ function ImageResultMessage({
 
   return (
     <div className="image-message">
-      <ImagePreview
-        alt={image?.revisedPrompt || message.prompt || text.imageAlt}
-        b64Json={image?.b64Json}
-        imageDataUrl={message.imageDataUrl}
-        onClick={canPreviewImage ? () => onOpenPreview(message) : undefined}
-        onPreviewSettled={onPreviewSettled}
-        outputFormat={params?.outputFormat}
-        previewSelfTest={previewSelfTest}
-        previewDataUrl={image?.previewDataUrl}
-        requestedSize={params?.size}
-        text={text}
-        url={image?.url}
-      />
-      {params && <p className="image-metadata">{formatImageMetadata(params, text)}</p>}
-      <div className="image-actions">
-        <button
-          className="action-button"
-          disabled={!canDownloadImage}
-          onClick={() => onDownload(message)}
-          type="button"
-        >
-          {text.saveImage}
-        </button>
-        <button className="action-button" disabled={!canEditImage} onClick={() => onEditImage(message)} type="button">
-          {text.editImage}
-        </button>
-        <button
-          className="action-button"
-          disabled={!message.historyId}
-          onClick={() => onDeleteHistory(message)}
-          type="button"
-        >
-          {text.deleteHistory}
-        </button>
-        <button className="action-button" onClick={() => onRegenerate(message)} type="button">
-          {text.regenerate}
-        </button>
-        <button className="action-button" onClick={() => onSaveAsTemplate(message)} type="button">
-          {text.saveAsTemplate}
-        </button>
+      <div className={images.length > 1 ? 'image-result-list' : 'image-result-list image-result-list-single'}>
+        {images.map((image, index) => {
+          const scopedMessage = createMessageForResultImage(message, image, index)
+          const imagePreviewSource = getImagePreviewSource(
+            image,
+            params?.outputFormat,
+            scopedMessage.imageDataUrl ?? message.imageDataUrl
+          )
+          const canDownloadImage = Boolean(getImageDownloadHref(imagePreviewSource))
+          const canPreviewImage = Boolean(imagePreviewSource.source)
+          const canEditImage = Boolean(getImageEditingDataUrl(imagePreviewSource) || scopedMessage.historyId)
+
+          return (
+            <div className="image-result-item" key={scopedMessage.historyId ?? scopedMessage.id}>
+              <ImagePreview
+                alt={image?.revisedPrompt || message.prompt || text.imageAlt}
+                b64Json={image?.b64Json}
+                imageDataUrl={scopedMessage.imageDataUrl}
+                onClick={canPreviewImage ? () => onOpenPreview(scopedMessage) : undefined}
+                onPreviewSettled={onPreviewSettled}
+                outputFormat={params?.outputFormat}
+                previewSelfTest={previewSelfTest}
+                previewDataUrl={image?.previewDataUrl}
+                requestedSize={params?.size}
+                text={text}
+                url={image?.url}
+              />
+              {params && <p className="image-metadata">{formatImageMetadata(params, text)}</p>}
+              <div className="image-actions">
+                <button
+                  className="action-button"
+                  disabled={!canDownloadImage}
+                  onClick={() => onDownload(scopedMessage)}
+                  type="button"
+                >
+                  {text.saveImage}
+                </button>
+                <button
+                  className="action-button"
+                  disabled={!canEditImage}
+                  onClick={() => onEditImage(scopedMessage)}
+                  type="button"
+                >
+                  {text.editImage}
+                </button>
+                <button
+                  className="action-button"
+                  disabled={!scopedMessage.historyId}
+                  onClick={() => onDeleteHistory(scopedMessage)}
+                  type="button"
+                >
+                  {text.deleteHistory}
+                </button>
+                <button className="action-button" onClick={() => onRegenerate(message)} type="button">
+                  {text.regenerate}
+                </button>
+                <button className="action-button" onClick={() => onSaveAsTemplate(scopedMessage)} type="button">
+                  {text.saveAsTemplate}
+                </button>
+              </div>
+            </div>
+          )
+        })}
       </div>
       <EditDebugDetails details={editDebugDetails} text={text} />
     </div>

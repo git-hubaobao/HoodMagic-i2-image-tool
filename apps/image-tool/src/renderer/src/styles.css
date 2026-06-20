@@ -712,6 +712,19 @@ h1 {
   justify-items: start;
 }
 
+.image-result-list {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+}
+
+.image-result-item {
+  display: grid;
+  gap: 0;
+  justify-items: start;
+  min-width: 0;
+}
+
 .image-preview-frame {
   position: relative;
   display: grid;

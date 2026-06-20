@@ -72,6 +72,7 @@ describe('storage image-tool data helpers', () => {
     expect(settings.baseUrl).toBe('https://api.openai.com')
     expect(settings.endpointPath).toBe('/v1/images/generations')
     expect(settings.editEndpointPath).toBe('/v1/images/edits')
+    expect(settings.generationImageCount).toBe(1)
     expect(settings.sendOutputFormat).toBe(true)
     expect(settings.sendResponseFormat).toBe(false)
     expect(settings.providerCredentials).toEqual({})
@@ -633,6 +634,7 @@ describe('storage image-tool data helpers', () => {
     const data = sanitizeImageToolData({
       settings: {
         model: 'custom-image-model',
+        generationImageCount: 12,
         quality: 'not-supported'
       },
       history: [
@@ -652,6 +654,7 @@ describe('storage image-tool data helpers', () => {
     expect(data.version).toBe(1)
     expect(data.settings.model).toBe('custom-image-model')
     expect(data.settings.quality).toBe('auto')
+    expect(data.settings.generationImageCount).toBe(10)
     expect(data.settings.providerTemplateId).toBe(COMPATIBLE_PROVIDER_TEMPLATE_ID)
     expect(data.settings.endpointPath).toBe('/v1/images/generations')
     expect(data.settings.editEndpointPath).toBe('/v1/images/edits')

@@ -23,6 +23,7 @@ export default defineConfig({
     }
   },
   renderer: {
+    base: './',
     plugins: [react()],
     build: {
       rollupOptions: {
