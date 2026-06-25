@@ -6975,6 +6975,36 @@ html[data-theme='light'] select option {
     0 0 0 2px color-mix(in srgb, var(--primary) 20%, transparent);
 }
 
+.prompt-message-actions {
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 4px;
+  opacity: 0.74;
+  transition: opacity 140ms ease;
+}
+
+.message-user .message-bubble:hover .prompt-message-actions,
+.prompt-message-actions:focus-within {
+  opacity: 1;
+}
+
+.prompt-message-actions button,
+.chat-shell[data-theme] .prompt-message-actions button {
+  min-width: 54px;
+  min-height: 28px;
+  padding: 0 9px;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--control-bg, #ffffff) 72%, transparent);
+  color: var(--text, #263449);
+  box-shadow: none;
+}
+
+.prompt-message-actions button:hover:not(:disabled),
+.chat-shell[data-theme] .prompt-message-actions button:hover:not(:disabled) {
+  background: var(--control-hover, #f8fafc);
+  color: var(--primary-strong, #1d4ed8);
+}
+
 @media (max-width: 820px) {
   .usage-stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

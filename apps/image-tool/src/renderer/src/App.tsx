@@ -867,6 +867,10 @@ const enCopy = {
   usageEstimatedCostHint: 'Estimated only',
   deleteHistory: 'Delete history',
   regenerate: 'Regenerate',
+  editMessage: 'Edit',
+  sendMessage: 'Send',
+  messageActions: 'Sent message actions',
+  messageDraftLoaded: 'Loaded into the composer.',
   language: 'Language',
   theme: 'Theme',
   darkTheme: 'Dark',
@@ -1250,6 +1254,10 @@ const zhCopy: CopyText = {
   usageEstimatedCostHint: '预计费用',
   deleteHistory: '删除记录',
   regenerate: '重新生成',
+  editMessage: '编辑',
+  sendMessage: '发送',
+  messageActions: '已发送消息操作',
+  messageDraftLoaded: '已载入输入框，可修改后发送。',
   language: '语言',
   theme: '主题',
   darkTheme: '深色',
@@ -1334,6 +1342,10 @@ const isGenerationImageCount = (value: unknown): value is number => {
     Number.isInteger(value) &&
     generationImageCountOptions.includes(value as (typeof generationImageCountOptions)[number])
   )
+}
+
+const isComposerSizePreset = (value: string | undefined): value is ImageSizePreset => {
+  return Boolean(value && composerSizeOptions.some((option) => option.value === value))
 }
 
 const templateRecommendedQualityOptions = [
@@ -4841,6 +4853,30 @@ export function App(): React.JSX.Element {
     }
   }
 
+  const ensureActiveConversationForSubmission = async (): Promise<boolean> => {
+    if (!hasActiveConversation) {
+      const imageToolApi = getImageToolApi()
+      const diagnostics = getBridgeDiagnostics()
+      setIsBridgeReady(diagnostics.hasBridge)
+
+      if (!hasImageToolBridge(imageToolApi)) {
+        showToast(currentCopy.missingBridge)
+        return false
+      }
+
+      const state = await imageToolApi.createConversation(targetProjectId)
+      applySessionState(state)
+      await loadHistoryMessages(state.activeConversationId)
+
+      if (!state.activeConversationId) {
+        showToast(currentCopy.selectOrCreateChat)
+        return false
+      }
+    }
+
+    return true
+  }
+
   const submitComposerPrompt = async () => {
     if (appliedPromptTemplateType === 'image_to_image' && referenceImages.length === 0) {
       setPromptTemplateReferenceNotice(currentCopy.imageToImageTemplateNotice)
@@ -4854,24 +4890,8 @@ export function App(): React.JSX.Element {
       return
     }
 
-    if (!hasActiveConversation) {
-      const imageToolApi = getImageToolApi()
-      const diagnostics = getBridgeDiagnostics()
-      setIsBridgeReady(diagnostics.hasBridge)
-
-      if (!hasImageToolBridge(imageToolApi)) {
-        showToast(currentCopy.missingBridge)
-        return
-      }
-
-      const state = await imageToolApi.createConversation(targetProjectId)
-      applySessionState(state)
-      await loadHistoryMessages(state.activeConversationId)
-
-      if (!state.activeConversationId) {
-        showToast(currentCopy.selectOrCreateChat)
-        return
-      }
+    if (!(await ensureActiveConversationForSubmission())) {
+      return
     }
 
     await runImageTask(prompt, referenceImages.length > 0 ? 'image_reference' : 'image_generation')
@@ -5364,6 +5384,111 @@ export function App(): React.JSX.Element {
     referenceDragDepthRef.current = 0
     setIsReferenceDropActive(false)
     addReferenceImageFiles(getTransferImageFiles(event.dataTransfer.files))
+  }
+
+  const applyPromptMessageParamsToComposer = (params: ConversationParams | undefined) => {
+    if (!params) {
+      return
+    }
+
+    setModel(params.model || COMPOSER_MODEL_PRESET)
+
+    if (isComposerSizePreset(params.size)) {
+      setFixedSize(params.size)
+      setSizeMode(params.size === 'auto' ? 'auto' : 'fixed')
+    }
+
+    if (isComposerQuality(params.quality)) {
+      setQuality(params.quality)
+    }
+
+    if (isComposerOutputFormat(params.outputFormat)) {
+      setOutputFormat(params.outputFormat)
+    }
+
+    if (isGenerationImageCount(params.n ?? 1)) {
+      setGenerationImageCount(params.n ?? 1)
+    }
+  }
+
+  const handleEditPromptMessage = (message: ConversationMessage) => {
+    if (!message.prompt) {
+      return
+    }
+
+    setPrompt(message.prompt)
+    applyPromptMessageParamsToComposer(message.params)
+    setComposerPopover(undefined)
+    setAppliedPromptTemplateType(undefined)
+    setPromptTemplateReferenceNotice(undefined)
+    setReferenceUploadError(undefined)
+    setEditingSource(undefined)
+    setImageEditError(undefined)
+
+    if (message.params?.mode === 'image_reference') {
+      if (message.referenceImages?.length) {
+        setReferenceImages(message.referenceImages)
+        showToast(currentCopy.messageDraftLoaded)
+      } else {
+        setReferenceImages([])
+        setReferenceUploadError(currentCopy.referenceImageNotSaved)
+        showToast(currentCopy.referenceImageNotSaved)
+      }
+    } else {
+      setReferenceImages([])
+
+      if (message.params?.mode === 'image_edit') {
+        showToast(currentCopy.editModeNeedsSource)
+      } else {
+        showToast(currentCopy.messageDraftLoaded)
+      }
+    }
+
+    window.setTimeout(() => {
+      promptInputRef.current?.focus()
+      promptInputRef.current?.setSelectionRange(message.prompt?.length ?? 0, message.prompt?.length ?? 0)
+    }, 0)
+  }
+
+  const handleSendPromptMessage = async (message: ConversationMessage) => {
+    if (!message.prompt) {
+      return
+    }
+
+    if (!(await ensureActiveConversationForSubmission())) {
+      return
+    }
+
+    const mode = message.params?.mode ?? 'image_generation'
+
+    if (mode === 'image_edit') {
+      updateConversationMessages(message.conversationId ?? activeConversationIdRef.current, (currentMessages) => [
+        ...currentMessages,
+        {
+          ...toErrorMessage('missing_mask_for_resend', currentCopy.editModeNeedsSource, message.id),
+          conversationId: message.conversationId ?? activeConversationIdRef.current
+        }
+      ])
+      return
+    }
+
+    if (mode === 'image_reference') {
+      if (!message.referenceImages?.length) {
+        updateConversationMessages(message.conversationId ?? activeConversationIdRef.current, (currentMessages) => [
+          ...currentMessages,
+          {
+            ...toErrorMessage('reference_images_not_saved', currentCopy.referenceImageNotSaved, message.id),
+            conversationId: message.conversationId ?? activeConversationIdRef.current
+          }
+        ])
+        return
+      }
+
+      await runImageTask(message.prompt, 'image_reference', message.params, message.referenceImages)
+      return
+    }
+
+    await runImageTask(message.prompt, mode, message.params)
   }
 
   const handleRegenerate = (message: ConversationMessage) => {
@@ -7021,6 +7146,17 @@ export function App(): React.JSX.Element {
                               removeLabel={currentCopy.removeReferenceImage}
                             />
                           )}
+                          <div
+                            className="message-actions prompt-message-actions"
+                            aria-label={currentCopy.messageActions}
+                          >
+                            <button onClick={() => handleEditPromptMessage(message)} type="button">
+                              {currentCopy.editMessage}
+                            </button>
+                            <button onClick={() => void handleSendPromptMessage(message)} type="button">
+                              {currentCopy.sendMessage}
+                            </button>
+                          </div>
                         </>
                       )}
                       {message.kind === 'generating' && (
