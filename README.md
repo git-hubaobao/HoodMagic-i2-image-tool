@@ -4,9 +4,11 @@ HoodMagic小魔帽 i2 生图工具是一个独立的桌面端 AI 图像创作工
 
 项目已经从原始 monorepo 中独立出来，当前仓库只保留 i2 生图工具所需的应用层、存储层、任务队列、模型定义和接口适配代码。仓库不包含真实 API Key、用户历史图片、运行数据或安装包构建产物。
 
-<img width="1177" height="779" alt="ScreenShot_2026-06-22_000655_706" src="https://github.com/user-attachments/assets/e6bdf783-057b-4311-9078-32db6101de0c" />
+<img width="972" height="754" alt="主界面" src="https://github.com/user-attachments/assets/4db3566b-396f-40c2-86b2-63ffbf214deb" />
 
-<img width="1145" height="823" alt="提示词模板库" src="https://github.com/user-attachments/assets/4a719709-3190-4ad1-b0c8-7ddf7718ad69" />
+
+<img width="972" height="754" alt="提示词模板库界面" src="https://github.com/user-attachments/assets/9a2fbe02-ce9e-423b-aa54-92aaa293c40c" />
+
 
 
 ## 项目定位
